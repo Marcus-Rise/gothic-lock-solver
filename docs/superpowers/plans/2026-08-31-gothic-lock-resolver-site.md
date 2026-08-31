@@ -1,448 +1,297 @@
 # Gothic Lock Resolver Site Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to implement this plan task-by-task. Fresh implementation subagent per vertical task; review between tasks. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Создать production-quality mobile-first PWA, которая проводит пользователя от ввода замка до полного списка решения и интерактивного пошагового вскрытия, не меняя существующее вычислительное ядро.
+**Goal:** Создать production-quality mobile-first PWA, которая проводит игрока от ввода замка до полного списка решения и пошагового показа, сохраняя существующие solver semantics.
 
-**Architecture:** Next.js App Router размещается в корне репозитория рядом с неизменяемым ESM-ядром. Browser/UI владеет только состоянием взаимодействия; dedicated server-only boundary вызывает публичные `solveLock` и `applyCommand`, возвращая сериализованный результат и готовые кадры playback без копирования игровых правил. Web, core и integration имеют отдельные test stages; production acceptance завершается реальным Vercel Preview и Playwright E2E.
+**Architecture:** Весь repository root становится одним conventional Next.js App Router project с application code в `src/`. Существующий JavaScript solver механически переносится в TypeScript-модуль `src/server/solver-core/`; алгоритм остаётся framework-independent и доступен browser только через server-only adapter и Server Function. UI собирает факты и показывает ответ, web boundary валидирует и сериализует contract, core один решает замок.
 
-**Tech Stack:** Node.js 20.9+, Next.js App Router, React, TypeScript, Tailwind CSS, штатный Turbopack, Vercel Server Functions, native Web App Manifest + network-only service worker, Vitest + React Testing Library, Storybook `nextjs-vite` + Vitest addon, Playwright, Vercel Speed Insights.
+**Tech Stack:** Node.js 20.9+, Next.js App Router, React, TypeScript, Tailwind CSS, Turbopack, Vercel Server Functions, native Web App Manifest + network-only service worker, `node:test` + `tsx`, Vitest + React Testing Library, Storybook `nextjs-vite`, Playwright, Vercel Speed Insights.
 
 **Spec:** `../specs/2026-08-31-gothic-lock-resolver-site-design.md`
 
 ## Global Constraints
 
-- `docs/superpowers/specs/2026-08-31-gothic-lock-solver.md` остаётся источником игровых правил.
-- Не изменять `src/*.mjs`, `solve-lock.mjs` и существующие `test/*.test.mjs`; проверять их неизменность относительно базы ветки.
-- Browser code не импортирует ядро. Только server-only integration boundary импортирует `solveLock` и `applyCommand` из `src/index.mjs`.
-- Одна пластина всегда имеет одно числовое состояние `1..7`, один DOM+SVG-маркер и одну активную позицию.
-- Runtime assets создаются самостоятельно. Файлы `docs/superpowers/specs/assets/` служат reference input и не публикуются как игровые/runtime assets.
-- Не заявлять, что лицензия репозитория распространяется на Gothic/game assets; такие assets в scope и поставку не входят.
-- PWA устанавливается, но solver v1 остаётся online-only. Service worker не перехватывает и не кэширует расчёт, navigation или result payload.
-- Next.js development и production build используют штатный Turbopack. Vite ограничен Vitest/Storybook.
-- Не добавлять extracted game files, полное offline-решение, Canvas-state, first-run guide, отдельные продукты по типам устройств или новые продуктовые функции.
-- Не вводить числовые performance budgets. Фиксировать фактический Vercel/Web Vitals baseline и видимые регрессии.
-- Каждый task начинается с наблюдаемого RED, завершается независимым GREEN, core regression и атомарным commit.
+- Approved spec and five visual references remain authoritative and unchanged by this plan refinement.
+- `docs/superpowers/specs/2026-08-31-gothic-lock-solver.md` remains sole source of game rules.
+- Core still consumes `{ state, links }` and returns solver result. Migration may change language, paths and imports, never search rules, ordering, validation meaning or result meaning.
+- UI owns plate count/positions, directed-link input, navigation, full-list display and playback cursor. It never runs BFS, link arithmetic or solver truth checks.
+- `src/server/solver-web-adapter.ts` owns server validation, serialization, safe errors and playback-frame preparation using real core results.
+- `src/server/solver-core/` owns solver semantics only. It has no React, Next.js, Server Function, DOM/SVG, `localStorage`, PWA or presentation knowledge.
+- Browser code cannot import `src/server/**`. Adapter imports `server-only`; lint/build checks enforce dependency direction.
+- One plate always has one numeric state `1..7`, one DOM+SVG marker and one active position.
+- Runtime assets are original. Files under `docs/superpowers/specs/assets/` remain review inputs and never ship from `public/`.
+- PWA installs but solving remains online-only. Service worker does not cache navigation, Server Function requests or result payloads.
+- Vite is limited to Vitest/Storybook. Next.js dev/build use Turbopack.
+- No extracted game assets, offline solver, Canvas state, first-run guide, separate device products, new product features or numeric performance budgets.
+- No task introduces a second solver implementation. Core tests prove solver truth; other levels prove their own boundary or user behavior.
 
-## Locked Boundaries
+## Locked Project Structure
 
-### Repository areas
+Official Next.js guidance supports putting `app` and application code in `src/`, keeping project configuration at root, and organizing project files outside `app` while `app` stays route-focused: [Next.js project structure](https://nextjs.org/docs/app/getting-started/project-structure), [Next.js installation](https://nextjs.org/docs/app/getting-started/installation).
 
-| Area | Responsibility |
+| Path | Final responsibility |
 |---|---|
-| `src/`, `solve-lock.mjs`, existing `test/` | Неизменяемое solver core и его текущие 37 тестов. |
-| `app/` | Next.js routes, root layout, Server Function entry, metadata и manifest. |
-| `site/` | Browser state model, DOM+SVG lock UI, result UI и server-only adapter. Конкретное разбиение внутри area определяется cohesion, не создаёт новый public API. |
-| `e2e/` | Production-like Playwright flows через настоящий browser/server boundary. |
-| `.storybook/` и colocated stories | Изолированные component states и browser interaction checks. |
-| `public/` | Только самостоятельно созданные runtime/PWA assets и network-only service worker. |
+| `src/app/` | App Router route, root layout, metadata/manifest and dedicated Server Function entry. No solver implementation. |
+| `src/features/lock-resolver/` | Client state, DOM+SVG lock, stages, dialogs, result list and playback UI. Colocated `*.stories.tsx` only because Storybook stories describe the same component visual states. |
+| `src/server/solver-core/` | Exact final home of relocated TypeScript solver: `index.ts`, `lock-definition.ts`, `result.ts`, `solver.ts`, `state-codec.ts`, `transition.ts`. Pure domain code; internal, framework-independent. |
+| `src/server/solver-web-adapter.ts` | Only application boundary allowed to call core. Imports `server-only`, validates current contract, serializes result and derives playback frames through core `applyCommand`. |
+| `tests/core/` | `node:test` regression suite for solver semantics and migration parity only. Runs TypeScript through `tsx`; no DOM or web assertions. |
+| `tests/unit/` | Vitest + RTL tests for pure UI state, validation, rendering, accessibility, `localStorage` and long-list behavior using controlled adapter responses where isolation is intended. |
+| `tests/integration/` | Vitest in Node environment against real `solver-web-adapter` + relocated core; verifies input/result/playback contract, not UI rendering. |
+| `tests/e2e/` | Playwright flows through browser, Server Function and real core against production build or actual Preview. |
+| `.storybook/` | Storybook configuration and Vitest browser integration. Stories stay beside feature components; they are visual/interaction evidence, not solver or E2E proof. |
+| `public/` | Original PWA icons and network-only service worker only. |
+| repository root | `package.json`, lockfile and Next/TypeScript/Tailwind/ESLint/Vitest/Playwright config. No second app/package. |
 
-### Server/client contract
+### Migration disposition
 
-- Request — serializable `{ state, links }`, где `state` содержит 2–7 целых позиций `1..7`, а `links` — квадратную матрицу `-1 | 0 | 1` с нулевой диагональю.
-- Success envelope содержит неизменённый semantic result `solveLock` и `playbackFrames`. Каждый frame содержит номер шага, command, `before` и `after`, вычисленные server-side через `applyCommand`.
-- Failure envelope содержит safe Russian error message без stack, file paths и внутренних exception details.
-- `pending` — client state. `already-solved` — UI projection успешного `solved` с пустым `commands`. `unsolvable` сохраняет core status.
-- Client никогда не пересчитывает связи и не применяет команды самостоятельно.
+- Translate `src/index.mjs`, `lock-definition.mjs`, `result.mjs`, `solver.mjs`, `state-codec.mjs` and `transition.mjs` into six exact files under `src/server/solver-core/`.
+- Preserve algorithm bodies and observable results; make only TypeScript typing and import-path changes required by relocation.
+- Run current legacy suite first and record 37/37 PASS. During migration, compare relocated core against every existing semantic fixture and verified 26-step fixture.
+- `src/cli.mjs`, root `solve-lock.mjs`, CLI-only formatter/tests, `bin` and `solve` script may exist only as temporary migration adapter inside Task 1. Remove them before Task 1 commit. Final repository exposes only website product.
+- Move surviving semantic assertions into `tests/core/`. Do not move CLI presentation or filesystem behavior into core tests.
 
-### State ownership
+## Server, Client and Result Contract
 
-- Один browser reducer/state machine владеет этапом `initial | links | solution`, draft positions, confirmed positions, directed links, modal state, solver state, result, fullscreen-list state и playback cursor.
-- DOM/SVG полностью выводится из state; DOM, animation и raster references не являются источником данных.
-- Для 7 пластин визуальная конструкция следует master reference. Для 2–6 активных пластин сохраняется тот же корпус/depth language без выдуманных inactive plate states.
-- Cancel/back возвращает на один утверждённый уровень и не мутирует ранее подтверждённые данные.
+- Request is serializable `{ state, links }`: 2–7 integer positions `1..7`; square `-1 | 0 | 1` matrix with zero diagonal.
+- Success contains unchanged semantic solver result plus serialized playback frames. Each frame contains stable step number, returned command, `before` and `after` produced server-side with core `applyCommand`.
+- Failure contains safe Russian text without stack, paths or internal exception details.
+- `pending` is client state. `already-solved` is UI projection of `solved` with zero commands. `unsolvable` remains core status.
+- UI may validate interaction constraints for feedback, but server adapter remains contract authority. Neither layer recomputes whether solver output is correct.
 
-### Verification commands contract
+## Test Commands Contract
 
-Implementation вводит и поддерживает scripts:
+- `npm run test:core` — `node:test` over `tests/core/**/*.test.ts` through `tsx`.
+- `npm run test:unit` — Vitest + RTL over `tests/unit/`.
+- `npm run test:integration` — Vitest Node project over `tests/integration/` with real adapter/core.
+- `npm run test:storybook` — Storybook Vitest browser project.
+- `npm run test:e2e` — Playwright over `tests/e2e/` against production build or `BASE_URL`.
+- `npm run lint`, `npm run typecheck`, `npm run build`, `npm run build:storybook` keep separate failure signals.
+- `npm run verify` runs lint, typecheck, core, unit, integration, Storybook build/tests, Next production build and local production E2E.
 
-- `npm run test:core` — существующий `node --test`;
-- `npm run test:web` — Vitest + React Testing Library;
-- `npm run test:storybook` — Storybook Vitest browser project;
-- `npm run test:e2e` — Playwright против production build;
-- `npm run lint`, `npm run typecheck`, `npm run build`, `npm run build:storybook`;
-- `npm run verify` — lint, typecheck, core, web, Storybook, build и local production E2E в указанном порядке.
+Next.js defines unit/component, integration and E2E as distinct purposes and recommends E2E for async Server Components: [Next.js testing guide](https://nextjs.org/docs/app/guides/testing). Its Vitest guide recognizes `__tests__` or colocation; this project chooses one visible `tests/` hierarchy, with only Storybook stories colocated for tooling/visual ownership: [Next.js Vitest guide](https://nextjs.org/docs/app/guides/testing/vitest). Server-only imports receive a build-time guard through `server-only`: [Next.js Server and Client Components](https://nextjs.org/docs/app/getting-started/server-and-client-components).
 
-## Framework Facts Verified Before Planning
+## Execution and Review Contract
 
-- Next.js App Router uses Server Functions through a dedicated `use server` boundary; Client Components may call them, while security and validation remain server-side: [Next.js `use server`](https://nextjs.org/docs/app/api-reference/directives/use-server).
-- Current Next.js recommends E2E rather than unit tests for async Server Components: [Next.js testing guide](https://nextjs.org/docs/app/guides/testing).
-- Turbopack is default for both `next dev` and `next build`: [Next.js installation](https://nextjs.org/docs/app/getting-started/installation).
-- Native App Router manifest support is sufficient for the install contract; offline solver behavior remains explicitly excluded: [Next.js PWA guide](https://nextjs.org/docs/app/guides/progressive-web-apps).
-- Storybook for Next.js with Vite and its Vitest addon provide isolated real-browser component checks: [Storybook Next.js with Vite](https://storybook.js.org/docs/get-started/frameworks/nextjs-vite/), [Storybook Vitest addon](https://storybook.js.org/docs/writing-tests/integrations/vitest-addon/index).
-- Playwright `webServer` can exercise `next start` after production build: [Playwright web server](https://playwright.dev/docs/test-webserver).
-- Vercel Preview URLs and Speed Insights provide actual deployment and Web Vitals evidence: [Vercel deployments](https://vercel.com/docs/deployments/overview), [Speed Insights](https://vercel.com/docs/speed-insights).
-
----
-
-### Task 1: Production Walking Skeleton — UI to Server Function to `solveLock`
-
-**Goal / result:** Реальный non-throwaway путь `/` принимает минимальный валидный замок, проходит Client Component — Server Function — existing `solveLock` и показывает visual result. Core, web и integration уже запускаются раздельно.
-
-**Areas:**
-
-- Modify: `package.json`, `.gitignore`, `README.md`, `AGENTS.md`
-- Create framework contracts: `app/`, `site/`, `e2e/`, `next.config.ts`, `tsconfig.json`, `postcss.config.mjs`, `vitest.config.ts`, `playwright.config.ts`, ESLint config, `package-lock.json`
-- Read-only boundary: `src/index.mjs`, `src/result.mjs`, existing `test/`
-
-**Dependencies and public boundaries:**
-
-- Root package becomes the Vercel/Next.js project; CLI commands remain available.
-- Server-only adapter imports `solveLock`/`applyCommand`; browser imports only serializable types.
-- Initial minimal UI uses the same reducer and contract that later tasks extend; no temporary route or mock runtime path.
-
-**Test cycle:**
-
-- [ ] Add a failing server-adapter integration test: valid no-link definition returns success envelope, core result and replay frames; invalid definition returns safe failure envelope.
-- [ ] Add a failing Playwright walking-skeleton test that enters two plate positions, explicitly confirms initial state and empty links, then receives a visual solved result from the real Server Function.
-- [ ] Run `npm run test:core`; record the 37-test baseline before adding web dependencies.
-- [ ] Scaffold root App Router, TypeScript, Tailwind/PostCSS, scripts and test runners without touching core files.
-- [ ] Implement server-only adapter, dedicated Server Function and minimal reducer-backed route until both RED tests pass.
-- [ ] Update README/AGENTS with root web commands and the immutable core/browser/server boundary.
-
-**Verification commands:**
-
-- `npm run lint`
-- `npm run typecheck`
-- `npm run test:core`
-- `npm run test:web`
-- `npm run build`
-- `npm run test:e2e`
-- `git diff --exit-code origin/main -- src solve-lock.mjs test`
-
-**Acceptance evidence:**
-
-- Production build serves `/`; browser action issues a real Server Function request and renders result.
-- No browser bundle imports solver modules; build inspection and dependency graph show core only in server output.
-- CLI example and all 37 core tests remain byte/behavior compatible.
-
-**Commit boundary:** `feat: add solver web walking skeleton`
+- Execute only through `superpowers:subagent-driven-development`.
+- Dispatch one fresh implementation subagent for each Task 1–8. Brief includes branch, exact task, relevant spec/plan sections, allowed files, tests and commit boundary.
+- After implementation subagent reports GREEN, run review before next task. Stage 1 checks spec/plan compliance and forbidden scope. Stage 2 checks code quality, dependency direction, tests and evidence.
+- Reviewer reports gaps and violated contracts, not ready-made implementation or code for implementer.
+- Maximum three review-repair iterations per vertical task. One iteration is review verdict plus one bounded repair pass plus rerun of task gates.
+- If third iteration still fails, stop execution. Report exact failing contract, evidence, affected task and owner decision/blocker needed. Do not start Task N+1 and do not loop again.
+- Commit only after both review stages pass. Each task keeps one atomic commit boundary listed below.
 
 ---
 
-### Task 2: Live DOM+SVG Lock and Visual Contract
+### Task 1: Convert Repository to Next.js and Relocate Solver Core
 
-**Goal / result:** Живой lock module renders 2–7 active plates from state, matches approved depth/three-quarter language, and enforces one plate = one marker = one position in data and DOM.
+**Goal / result:** Root becomes one working Next.js TypeScript application; real browser request reaches relocated real core through server-only adapter; CLI disappears as product surface.
 
-**Areas:**
-
-- Create/modify: `site/` lock state/rendering area, colocated tests and stories
-- Create: `.storybook/` config using `@storybook/nextjs-vite`, Vitest browser project and accessibility addon
-- Reference only: five PNG files under `docs/superpowers/specs/assets/`
-
-**Dependencies and public boundaries:**
-
-- SVG geometry, selected state and markers derive only from reducer state.
-- Full seven-plate state follows master geometry; smaller valid counts preserve housing/depth language and do not create extra stateful plates.
-- Reference PNGs never move into `public/` and are not imported by runtime code.
+**Files:** root framework config/scripts; `src/app/`; `src/features/lock-resolver/`; `src/server/`; `tests/core/`; `tests/integration/`; `tests/e2e/`. Remove legacy `.mjs`/CLI paths after parity proof.
 
 **Test cycle:**
 
-- [ ] Add failing Vitest/RTL cases for 2 and 7 plates, exactly one marker/current position per active plate, and no duplicate active positions during rerender.
-- [ ] Add failing Storybook interaction stories for default, selected, boundary position, maximum seven-plate and raster-defect guard states.
-- [ ] Implement DOM+SVG structure, independent visual materials and responsive scale until tests/stories pass.
-- [ ] Add accessibility assertions: semantic interactive controls, accessible SVG name/description, visible keyboard focus, state not communicated by color alone.
+- [ ] Run untouched baseline: `npm test`; require exactly 37 tests and 37 PASS.
+- [ ] Add RED core migration-parity cases covering validation, transition ordering/blocking, shortest path/tie-breaking, solved/unsolvable/already-open results and 26-step fixture.
+- [ ] Add RED integration cases for valid/invalid requests, solved/unsolvable/already-solved serialization and frame sequence from real adapter/core.
+- [ ] Add RED Playwright walking skeleton: two plates, explicit confirmation, empty links, real Server Function, visible solved result.
+- [ ] Create conventional `src` App Router project and test scripts; translate/move core mechanically; wire server-only adapter and Server Function.
+- [ ] Compare old and relocated semantic results before deleting temporary CLI adapter; then remove all CLI product entries.
 
-**Verification commands:**
+**Verification:** `npm run lint && npm run typecheck && npm run test:core && npm run test:integration && npm run build && npm run test:e2e`.
 
-- `npm run test:web`
-- `npm run test:storybook`
-- `npm run build:storybook`
-- `npm run test:core`
-- `git diff --exit-code origin/main -- src solve-lock.mjs test`
+**Acceptance evidence:** Core fixtures match before/after; client import of `src/server/**` fails lint/build; browser bundle contains no solver; final tree has no CLI entry or package script.
 
-**Acceptance evidence:**
+**Commit boundary:** `refactor: move solver into Next.js server core`
 
-- Storybook shows 2-plate and 7-plate locks without parallel-row or hinged-lever geometry.
-- DOM inspection proves exactly one marker and one active position per plate in every story.
-- Runtime contains no copied/extracted/reference PNG asset.
+---
+
+### Task 2: Build Live DOM+SVG Lock
+
+**Goal / result:** UI renders 2–7 plates with approved depth language and enforces one plate, one marker, one position.
+
+**Files:** `src/features/lock-resolver/`, colocated stories, `tests/unit/`.
+
+**Test cycle:**
+
+- [ ] Add RED unit/component cases for 2 and 7 plates, positions `1..7`, exactly one marker/current position per plate and stable rerender.
+- [ ] Add RED keyboard/accessibility cases for names, values, focus and non-color state cues.
+- [ ] Add Storybook states for default, selected, boundary, seven-plate and raster-defect guard views.
+- [ ] Implement DOM+SVG lock from client state only; compare stories with approved visual references.
+
+**Verification:** `npm run test:core && npm run test:unit && npm run test:storybook && npm run build:storybook && npm run build`.
+
+**Acceptance evidence:** Unit DOM assertions and Storybook inspection prove invariant; runtime imports no approved PNG.
 
 **Commit boundary:** `feat: add live Gothic lock module`
 
 ---
 
-### Task 3: Initial-State Stage and Safe Stage Navigation
+### Task 3: Implement Initial State and Safe Stage Navigation
 
-**Goal / result:** Пользователь выбирает 2–7 plates, reproduces positions using left/right controls, confirms initial state, and navigates safely without links affecting this stage.
+**Goal / result:** Player chooses 2–7 plates, reproduces positions, confirms initial state and moves between stages without losing confirmed data.
 
-**Areas:**
-
-- Modify: `site/` reducer and initial-stage UI, related stories/tests
-- Extend: `e2e/` primary user journey
-
-**Dependencies and public boundaries:**
-
-- Initial movement changes exactly one selected plate by one division and stops at `1`/`7`.
-- Directed links remain absent/inactive until confirmation; no solver call occurs.
-- Confirmed positions are immutable across cancel/back until user deliberately re-enters initial editing.
+**Files:** `src/features/lock-resolver/`, stories, `tests/unit/`, `tests/e2e/`.
 
 **Test cycle:**
 
-- [ ] Add failing reducer/component cases for plate count bounds, horizontal left/right movement, position boundaries, ignored links and explicit confirmation gate.
-- [ ] Add failing keyboard/focus cases for stage controls and `Escape`/«Отмена»/«Назад» without data loss.
-- [ ] Extend production-like E2E from initial entry through the links-stage boundary.
-- [ ] Implement the stage using the Task 2 DOM+SVG module and shared reducer.
+- [ ] Add RED unit cases for count bounds, one-division left/right movement, `1`/`7` boundaries, ignored links and confirmation gate.
+- [ ] Add RED cancel/back/Escape and focus cases preserving confirmed state.
+- [ ] Add RED E2E from fresh page through explicit initial confirmation into links stage.
+- [ ] Implement state transitions and UI using Task 2 lock.
 
-**Verification commands:**
+**Verification:** `npm run test:core && npm run test:unit && npm run build && npm run test:e2e`.
 
-- `npm run test:web`
-- `npm run test:storybook`
-- `npm run build && npm run test:e2e`
-- `npm run test:core`
-
-**Acceptance evidence:**
-
-- Positions never leave `1..7`; links cannot move plates during reproduction.
-- The links stage is unreachable before explicit confirmation.
-- Keyboard-only journey reaches and leaves each control with predictable focus.
+**Acceptance evidence:** Links stage unreachable before confirmation; initial movement never invokes core or applies links; keyboard flow complete.
 
 **Commit boundary:** `feat: add initial lock setup flow`
 
 ---
 
-### Task 4: Directed Links, Warning Gate, and Complete Solver States
+### Task 4: Implement Directed Links, Warning and Result States
 
-**Goal / result:** Пользователь defines, reviews, edits and deletes directed sync/reverse links, confirms them, passes the first-run warning, and receives `pending`, `solved`, `unsolvable`, `already-solved` or `error` through the real core boundary.
+**Goal / result:** Player creates/edits/deletes directed links, confirms them, handles first-run warning and sees every product result state through real core boundary.
 
-**Areas:**
-
-- Modify: `site/` reducer, links UI, warning dialog, result-state projection and server boundary tests
-- Extend: stories and `e2e/`
-
-**Dependencies and public boundaries:**
-
-- Link default is zero; source confirmation precedes target/type selection; reverse link is never inferred.
-- Cancel from type returns to target; earlier cancel returns to source; confirmed state remains unchanged.
-- Warning suppression is one boolean in browser `localStorage`; no cookies, analytics, key exposure or solver-input persistence.
-- Server validation remains authoritative even after client validation.
+**Files:** `src/features/lock-resolver/`, `src/app/`, `src/server/solver-web-adapter.ts`, stories, `tests/unit/`, `tests/integration/`, `tests/e2e/`.
 
 **Test cycle:**
 
-- [ ] Add failing reducer/UI cases for source/target/type ordering, sync/reverse direction, edit/delete, zero default and cancel hierarchy.
-- [ ] Add failing dialog cases for first display, position+link warning content, checkbox persistence, repeat suppression, focus containment and focus restoration.
-- [ ] Add failing state cases for delayed `pending`, valid `solved`, existing unsolvable fixture, `[4,4]` already-solved projection and invalid-input `error`.
-- [ ] Extend Playwright through actual link entry and Server Function for solved, unsolvable, already-solved and error paths; keep `pending` deterministic at component/integration level.
-- [ ] Implement links workflow, modal gate and UI projections without changing core statuses.
+- [ ] Add RED unit cases for source confirmation, target/type order, sync/reverse direction, zero default, no inferred reverse, edit/delete and cancel hierarchy.
+- [ ] Add RED unit cases for first warning, checkbox persistence in `localStorage`, repeat suppression, focus containment/restoration and no cookies.
+- [ ] Add controlled-response unit cases for pending/solved/unsolvable/already-solved/error rendering.
+- [ ] Add real-core integration cases for exact submitted matrix, safe validation error and all serialized terminal states.
+- [ ] Add Playwright flows through Server Function for solved, unsolvable, already-solved and product-visible error.
+- [ ] Implement workflow without solver logic outside core.
 
-**Verification commands:**
+**Verification:** `npm run test:core && npm run test:unit && npm run test:integration && npm run build && npm run test:e2e`.
 
-- `npm run test:web`
-- `npm run test:storybook`
-- `npm run build && npm run test:e2e`
-- `npm run test:core`
-
-**Acceptance evidence:**
-
-- UI matrix submitted to `solveLock` matches visible confirmed directed links exactly.
-- Screen-reader and keyboard flow announce dialog, pending and terminal result states.
-- Raw exceptions/stacks never reach rendered output.
+**Acceptance evidence:** Confirmed links equal adapter request; states distinguishable and announced; raw exceptions never render.
 
 **Commit boundary:** `feat: add directed link solving flow`
 
 ---
 
-### Task 5: Full Solution List and 26-Step Mobile Fullscreen
+### Task 5: Implement Full Result and 26-Step Mobile Fullscreen
 
-**Goal / result:** Full numbered combination is always visible from result; small screens can open an optional vertically scrollable fullscreen list and return without losing result or reading position.
+**Goal / result:** Full stable list always exists; mobile fullscreen scrolls 26 steps and returns without losing result or reading position.
 
-**Areas:**
+**Files:** `examples/lock.long.json`, `src/features/lock-resolver/`, stories, `tests/core/`, `tests/unit/`, `tests/e2e/`.
 
-- Create: `examples/lock.long.json` with the verified 26-command definition below
-- Modify: `site/` result/list state, stories/tests, `e2e/`
-
-**Dependencies and public boundaries:**
-
-- Verified fixture input: `state = [4,7,3,6,5,6]`; `links = [[0,0,-1,0,1,-1],[1,0,0,0,0,-1],[-1,0,0,0,0,-1],[1,1,0,0,0,0],[0,-1,0,1,0,1],[1,0,0,-1,0,0]]`.
-- Current `solveLock` must return `solved`, 26 commands and final `[4,4,4,4,4,4]`; do not store a hand-written command list.
-- Fullscreen list is a view of existing result state, not a second result store.
+**Locked fixture:** `state = [4,7,3,6,5,6]`; `links = [[0,0,-1,0,1,-1],[1,0,0,0,0,-1],[-1,0,0,0,0,-1],[1,1,0,0,0,0],[0,-1,0,1,0,1],[1,0,0,-1,0,0]]`. Real core must return `solved`, 26 commands and final `[4,4,4,4,4,4]`; never store hand-written solution list.
 
 **Test cycle:**
 
-- [ ] Add a failing deterministic fixture assertion for exactly 26 solver commands without modifying core tests.
-- [ ] Add failing Vitest/RTL and Storybook cases for full 26-item numbering, vertical overflow, optional fullscreen action, simple exit and playback remaining separate.
-- [ ] Add failing mobile Playwright flow that enters the real fixture through UI, opens fullscreen, scrolls, exits and confirms preserved result and reading position.
-- [ ] Implement result list/fullscreen state and focus restoration.
+- [ ] Add core fixture regression for exact 26-command count and final state.
+- [ ] Add controlled-response unit/Storybook cases for numbering `1..26`, overflow, fullscreen exit, focus and preserved reading position.
+- [ ] Add mobile E2E that enters real fixture, solves through Server Function, opens fullscreen, scrolls, exits and verifies preserved result/position.
+- [ ] Implement fullscreen as view of one result state, separate from playback.
 
-**Verification commands:**
+**Verification:** `npm run test:core && npm run test:unit && npm run test:storybook && npm run build && npm run test:e2e`.
 
-- `node --input-type=module -e "import { readFile } from 'node:fs/promises'; import { solveLock } from './src/index.mjs'; const definition=JSON.parse(await readFile('./examples/lock.long.json','utf8')); const result=solveLock(definition); if(result.status!=='solved'||result.commands.length!==26) process.exit(1)"`
-- `npm run test:web`
-- `npm run test:storybook`
-- `npm run build && npm run test:e2e`
-- `npm run test:core`
-
-**Acceptance evidence:**
-
-- Every number `1..26` is stable before, during and after fullscreen viewing.
-- Exit returns focus to the opener and restores the same reading position.
-- Full list remains reachable even when playback exists.
+**Acceptance evidence:** Stable numbers before/during/after fullscreen; full list remains reachable; no duplicate result store.
 
 **Commit boundary:** `feat: add long solution list experience`
 
 ---
 
-### Task 6: Interactive Step-by-Step Playback
+### Task 6: Implement Server-Derived Playback
 
-**Goal / result:** «Вести по шагам» presents each command on the live lock with selected plate, before/after state and real sequential DOM+SVG movement while the full list remains available.
+**Goal / result:** Player advances through real returned commands on live lock with selected plate and before/after state while full list remains intact.
 
-**Areas:**
-
-- Modify: server success envelope/playback frames, `site/` playback state/rendering, stories/tests, `e2e/`
-
-**Dependencies and public boundaries:**
-
-- Server-only adapter derives every frame using public `applyCommand` from the confirmed initial state and returned commands.
-- Client advances only through returned frames; no link arithmetic exists in browser code.
-- Every frame preserves one marker/one active position and stable step numbering.
+**Files:** `src/server/solver-web-adapter.ts`, `src/features/lock-resolver/`, stories, `tests/integration/`, `tests/unit/`, `tests/e2e/`.
 
 **Test cycle:**
 
-- [ ] Add failing server integration cases comparing each frame with direct `applyCommand`, including sync, reverse and blocked-command guard behavior.
-- [ ] Add failing component/Storybook cases for current command, selected plate, before/after values, start/end boundaries and return to full list.
-- [ ] Add failing accessibility cases for current-step announcement, non-color selection cues, focus order and no duplicate markers during transition.
-- [ ] Extend production-like Playwright through a complete playback and compare final visual state with `solveLock.finalState`.
-- [ ] Implement playback over serialized frames only.
+- [ ] Add real-core integration cases proving every serialized frame equals sequential internal `applyCommand`, including sync/reverse links and blocked-frame failure handling.
+- [ ] Add controlled-response unit/Storybook cases for current command, selected plate, before/after, start/end boundaries, announcement and return to full list.
+- [ ] Add E2E completing playback through real Server Function and comparing rendered final positions with returned final state.
+- [ ] Implement client playback over returned frames only.
 
-**Verification commands:**
+**Verification:** `npm run test:core && npm run test:unit && npm run test:integration && npm run build && npm run test:e2e`.
 
-- `npm run test:web`
-- `npm run test:storybook`
-- `npm run build && npm run test:e2e`
-- `npm run test:core`
-- `git diff --exit-code origin/main -- src solve-lock.mjs test`
-
-**Acceptance evidence:**
-
-- DOM states before/after every command match server frames and final core state.
-- Playback never hides or mutates the full numbered combination.
-- No raster frame or animation artifact can create a second marker/position.
+**Acceptance evidence:** No transition arithmetic in client; one-marker invariant holds through every E2E step; playback never hides or mutates full list.
 
 **Commit boundary:** `feat: add interactive solution playback`
 
 ---
 
-### Task 7: Approved Visual Convergence, Responsive Accessibility, and Installable PWA
+### Task 7: Finish Visual System, Accessibility and Installable PWA
 
-**Goal / result:** All stages converge on the approved five-frame package, work as one responsive product, and install as a network-required PWA without shipping reference/game assets.
+**Goal / result:** All stages match approved visual package, work on phone/tablet/desktop and install as explicit online-required PWA.
 
-**Areas:**
-
-- Modify: `app/` layout/metadata/manifest, `site/` visual styles and responsive behavior, Storybook stories
-- Create: `public/` independently made PWA icons and network-only service worker/registration
-- Reference only: approved PNG package under docs
-
-**Dependencies and public boundaries:**
-
-- Native manifest declares standalone installability and original icons.
-- Service worker registration provides install support but no fetch cache for routes, Server Functions or results.
-- Responsive acceptance uses phone, tablet and approved wide-layout view; exact CSS breakpoint values remain implementation-private and are not product contracts.
-- Theme uses approved dark carved wood, aged metal, warm brass/ivory accents, Russian Gothic serif hierarchy, recessed panels and beveled controls without copying extracted assets.
+**Files:** `src/app/`, `src/features/lock-resolver/`, stories, `.storybook/`, `public/`, `tests/unit/`, `tests/e2e/`.
 
 **Test cycle:**
 
-- [ ] Add failing manifest/service-worker tests: manifest fields/icons resolve; service worker contains no solver/navigation/result cache path.
-- [ ] Add failing Storybook visual-state coverage for initial mobile, links mobile, solution mobile, responsive wide links, all terminal states and modal/fullscreen dialogs.
-- [ ] Add failing accessibility checks for names/roles/values, heading order, focus visibility, modal/fullscreen focus containment, status announcements, keyboard-only completion and non-color cues.
-- [ ] Add Playwright installability/network tests: manifest and icons load over production server; offline calculation reaches explicit error rather than false success; reconnect permits solve.
-- [ ] Implement visual convergence, original runtime assets and PWA shell.
+- [ ] Add manifest/service-worker tests: required fields/icons resolve; no route, Server Function or result caching.
+- [ ] Add Storybook visual states for approved mobile/wide frames, all terminal states, warning and fullscreen.
+- [ ] Add unit/Storybook accessibility checks for roles, names, values, heading order, focus visibility/containment, status announcements and non-color cues.
+- [ ] Add Playwright phone/tablet/desktop paths plus manifest/icons, offline solve error and reconnect success.
+- [ ] Implement original styling/assets and network-only PWA shell.
 
-**Verification commands:**
+**Verification:** `npm run verify` plus build-output scan proving approved PNG paths are absent from runtime assets.
 
-- `npm run lint`
-- `npm run typecheck`
-- `npm run test:web`
-- `npm run test:storybook`
-- `npm run build:storybook`
-- `npm run build && npm run test:e2e`
-- `npm run test:core`
-- `! git grep -n "docs/superpowers/specs/assets" -- app site public`
-
-**Acceptance evidence:**
-
-- Storybook comparison covers each approved frame role and written invariants; raster artifacts never override contract.
-- PWA installs from production build; offline solve is impossible and explained, not silently cached.
-- No docs reference, screenshot or extracted asset is served from `public/`.
+**Acceptance evidence:** Written invariant wins over raster defect; no game/reference asset ships; install succeeds; offline solve fails clearly and reconnect recovers.
 
 **Commit boundary:** `feat: finalize responsive installable experience`
 
 ---
 
-### Task 8: Vercel Preview, Actual E2E, Web Vitals, and Delivery Evidence
+### Task 8: Verify Actual Vercel Preview and Delivery Evidence
 
-**Goal / result:** Branch deploys to an actual Vercel Preview, full Playwright suite passes against that URL, Speed Insights records a real baseline, and operator docs match shipped commands and boundaries.
+**Goal / result:** Immutable Preview runs full product through real deployment; Speed Insights records actual baseline; docs match shipped project.
 
-**Areas:**
-
-- Modify: root layout for `@vercel/speed-insights/next`, remote Playwright configuration, README/AGENTS and delivery evidence
-- External: Vercel project linked to repository root; Preview Deployment only
-
-**Dependencies and public boundaries:**
-
-- Speed Insights only records performance metrics; Web Analytics is not added.
-- Preview E2E uses `BASE_URL`; if Deployment Protection is enabled, Playwright sends `x-vercel-protection-bypass` from `VERCEL_AUTOMATION_BYPASS_SECRET` without logging the value.
-- No PR merge or production promotion occurs in this task.
+**Files:** root verification config, `src/app/` Speed Insights integration, `tests/e2e/`, README/AGENTS and delivery evidence.
 
 **Test cycle:**
 
-- [ ] Add a failing integration assertion that the Speed Insights client is present only in web layout and does not enter core/CLI paths.
-- [ ] Add remote Playwright configuration that reuses the same scenarios without starting local `webServer` when `BASE_URL` is supplied.
-- [ ] Run `npm run verify` locally and fix only failures attributable to site work.
-- [ ] Deploy Preview with `vercel deploy --yes`, store its immutable URL in task-specific `GOTHIC_PREVIEW_URL`, and confirm `/` plus Speed Insights script route return success.
-- [ ] Run the complete Playwright suite against the Preview URL, including actual Client Component — Server Function, 26-step mobile fullscreen, playback, offline error/reconnect and all result states.
-- [ ] Visit the Preview with mobile and wide profiles; record the initial Vercel Speed Insights/Core Web Vitals baseline after data appears, without inventing pass thresholds.
-- [ ] Update README/AGENTS with test matrix, PWA online requirement, Vercel verification and immutable-core rule.
+- [ ] Add integration guard proving Speed Insights stays in web layout and never enters core.
+- [ ] Configure same Playwright scenarios to use `BASE_URL` without local `webServer`.
+- [ ] Run full local `npm run verify`.
+- [ ] Deploy Vercel Preview; verify browser trigger, Server Function request, real core response and rendered result. If protection is enabled, use automation bypass header without logging secret.
+- [ ] Run complete E2E against Preview: happy path, unsolvable, already-solved, error, cancel/back, 26-step fullscreen, playback, mobile, PWA offline/reconnect.
+- [ ] Check Preview server logs at each request boundary and stop at first broken boundary instead of continuing past it.
+- [ ] Record real Speed Insights LCP/INP/CLS baseline after data appears; do not invent thresholds.
+- [ ] Update operator docs only after commands and deployed paths are proven.
 
-**Verification commands:**
+**Verification:** local `npm run verify`; Preview deploy; `BASE_URL` remote Playwright run; deployment log check; Speed Insights data check.
 
-- `npm run verify`
-- `vercel deploy --yes`
-- `BASE_URL="$GOTHIC_PREVIEW_URL" npm run test:e2e`
-- `vercel curl / --deployment "$GOTHIC_PREVIEW_URL"`
-- `vercel logs --deployment "$GOTHIC_PREVIEW_URL" --level error`
-- `git diff --exit-code origin/main -- src solve-lock.mjs test`
-- `git status --short`
-
-**Acceptance evidence:**
-
-- Vercel Preview URL and deployment commit SHA are recorded.
-- Remote Playwright reports all flows green; no Server Function errors appear in Vercel logs.
-- Speed Insights request is present and dashboard receives a real preview data point; actual LCP/INP/CLS values are recorded as baseline, not gates.
-- `npm run test:core` still reports the original 37 tests passing.
+**Acceptance evidence:** Preview URL/SHA recorded; remote E2E green; Vercel logs show no Server Function errors; Speed Insights receives real data. This follows Vercel plugin full-story verification: browser, server boundary, core response, rendered UI.
 
 **Commit boundary:** `chore: verify Vercel resolver delivery`
 
 ---
 
-## Requirement Coverage Self-Review
+## Test Case to User Story to Owner Level Matrix
 
-| Requirement / acceptance block | Plan tasks |
-|---|---|
-| SITE-01 adaptive single product | 2, 3, 7, 8 |
-| SITE-02 installable online-required PWA | 7, 8 |
-| SITE-03 initial — links — solution gates | 1, 3, 4 |
-| SITE-04 pending/solved/unsolvable/already-solved/error | 4, 8 |
-| SITE-05 full list plus separate playback | 5, 6 |
-| SITE-06 independent Gothic visual language/no game assets | 2, 7 |
-| SITE-07 26-step mobile fullscreen and preserved position | 5, 8 |
-| LOCK-01 2–7 plates, `1..7`, one pin/position | 2, 3, 7 |
-| LOCK-02 explicit initial confirmation | 3 |
-| LOCK-03 source confirmation/directed context | 4 |
-| LOCK-04 sync/reverse link, no inferred reverse | 4 |
-| LOCK-05 inspect/edit/delete/confirm links | 4 |
-| LOCK-06 Escape/Cancel/Back hierarchy | 3, 4, 7 |
-| LOCK-07 warning + `localStorage`, no cookies | 4 |
-| LOCK-08 live before/after playback via core behavior | 6 |
-| Server/client boundary and actual Server Function | 1, 4, 8 |
-| Core/web/integration separation | All tasks; explicit gates in 1 and 8 |
-| Storybook/Vitest/RTL/Playwright/node:test | 1, 2, 4–8 |
-| Accessibility across controls, dialogs, statuses and SVG | 2–7, remote proof in 8 |
-| Approved visual references and written-contract priority | 2, 7 |
-| Vercel Preview and Web Vitals | 8 |
+Each row names concrete proof. Multiple levels have different oracles; none repeats BFS truth outside `node:test` core.
 
-Self-review result:
+| Story | Concrete test cases | Owner level and oracle | Why this level |
+|---|---|---|---|
+| SITE-01 | `TC-SITE-01A` main path at phone/tablet/desktop; `01B` same stages/controls each size | Storybook: three layouts. Playwright: real browser path on three viewports. Preview: production phone + wide smoke. | Storybook reveals layout regression; E2E proves one usable product; Preview proves deployed CSS/assets. |
+| SITE-02 | `TC-SITE-02A` manifest/icons valid; `02B` offline solve shows network requirement; `02C` reconnect solves | Unit: manifest/service-worker policy. Playwright: resources and offline/reconnect. Preview: real HTTPS manifest + solve. | Static policy is local; browser/HTTPS behavior needs E2E/deployment. |
+| SITE-03 | `TC-SITE-03A` explicit stage confirmation; `03B` cancel/back preserves facts | Unit: state transitions with controlled responses. Playwright: browser path through real Server Function. | Reducer owns transitions; E2E proves wiring. |
+| SITE-04 | `TC-SITE-04A` pending; `04B` solved; `04C` unsolvable; `04D` already-solved; `04E` safe error | Unit: render/announce five controlled states. Integration: real adapter terminal serialization. Playwright: visible terminal paths; pending stays deterministic unit proof. | Unit isolates UI; integration proves contract; E2E proves visible outcome without timing-flaky pending. |
+| SITE-05 | `TC-SITE-05A` full list stays; `05B` command/before/after; `05C` return preserves list | Unit/Storybook: controlled list/playback. Integration: real frames. Playwright: real solve/playback. | UI, adapter and full path own different truths. |
+| SITE-06 | `TC-SITE-06A` approved Gothic states; `06B` no reference/game runtime assets | Storybook: visual comparison. Unit/build: asset-import guard. Preview: phone/wide inspection. | Rendered review, deterministic guard and deployment each catch distinct risk. |
+| SITE-07 | `TC-SITE-07A` 26 stable numbers; `07B` mobile fullscreen scroll; `07C` exit restores position | Core: real fixture returns 26. Unit/Storybook: fullscreen state. Playwright: real mobile fixture. Preview: deployed mobile flow. | Core owns count; UI owns view; E2E/Preview own scrolling. |
+| LOCK-01 | `TC-LOCK-01A` 2/7 plates; `01B` boundaries; `01C` one marker through rerender/playback; `01D` links inactive during input | Core: position/transition semantics. Unit/Storybook: DOM/SVG invariant. Playwright: invariant through playback. | Solver bounds, DOM and animation require separate oracles. |
+| LOCK-02 | `TC-LOCK-02A` links unavailable early; `02B` confirmation preserves positions | Unit: state gate. Playwright: cannot advance early, advances after action. | State machine proves rule; E2E proves control. |
+| LOCK-03 | `TC-LOCK-03A` source confirmation; `03B` active context; `03C` no reverse edge | Unit: state/UI. Integration: exact matrix reaches real adapter. | UI owns selection; integration owns transport. |
+| LOCK-04 | `TC-LOCK-04A` zero default; `04B` sync; `04C` reverse; `04D` source differs target | Core: coefficient movement semantics. Unit: choices/labels. Integration: matrix unchanged. | Core alone proves movement meaning; UI/integration prove captured facts. |
+| LOCK-05 | `TC-LOCK-05A` list; `05B` edit; `05C` delete; `05D` confirmation gate | Unit/Storybook: interactions/states. Playwright: real edit/delete/confirm journey. | Feature state and usable browser path are distinct. |
+| LOCK-06 | `TC-LOCK-06A` type-to-target cancel; `06B` target-to-source; `06C` Escape/Back preserve; `06D` focus restored | Unit: hierarchy/focus. Playwright: keyboard-only path. | Reducer proves hierarchy; browser proves keyboard/focus. |
+| LOCK-07 | `TC-LOCK-07A` first warning; `07B` checkbox persists; `07C` repeat suppressed; `07D` no cookies; `07E` focus containment/restoration | Unit with storage mock. Playwright: first/second real solve attempt. | Client owns storage/dialog; E2E proves persistence across attempts. |
+| LOCK-08 | `TC-LOCK-08A` frames equal sequential `applyCommand`; `08B` selected/before/after visible; `08C` final DOM equals core final; `08D` blocked frame safe error | Core: command semantics. Integration: frame serialization/guard. Unit/Storybook: frame rendering. Playwright: complete real playback. | Algorithm, adapter, presentation and user path each have one owner. |
 
-- Spec and all `SITE-*`/`LOCK-*` stories map to at least one independently verifiable task.
-- Error, empty/already-solved, unsolvable and pending states are explicit in Task 4 and remote acceptance.
-- Async Server Components and real Client Component — Server Function flow are covered only by production-like E2E.
-- No implementation task changes solver core or duplicates link/transition logic.
-- Plan contains no unresolved product decision; implementation-private layout and breakpoint values are constrained by approved reference checks.
+## Coverage and Self-Review
+
+- All 15 approved stories appear exactly once in matrix; each has concrete case IDs, owner level, oracle and level rationale.
+- `node:test` proves solver semantics/migration parity only. Vitest unit proves UI state/rendering. Integration distinguishes real adapter/core from controlled UI responses. Storybook proves visual states. Playwright proves real browser/Server Function/core paths. Preview/Speed Insights prove deployment-only evidence.
+- Exact final core target: `src/server/solver-core/`. Exact tests hierarchy: `tests/core`, `tests/unit`, `tests/integration`, `tests/e2e`.
+- No ad-hoc top-level application folder, parallel application, Git submodule, second package or permanent CLI surface remains.
+- No task changes solver rules or duplicates solver logic.
+- No unresolved product or architecture choice remains. Breakpoints and internal component names stay implementation-private.
+- Placeholder scan must return no planning gaps or generic unscoped error/test instructions.
+- Before Task 1 begins, untouched repository must still report 37/37 tests PASS.
