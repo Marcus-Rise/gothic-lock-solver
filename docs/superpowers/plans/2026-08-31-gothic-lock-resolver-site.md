@@ -42,7 +42,7 @@ Official Next.js guidance supports putting `app` and application code in `src/`,
 | `tests/core/` | `node:test` regression suite for solver semantics and migration parity only. Runs TypeScript through `tsx`; no DOM or web assertions. |
 | `tests/unit/` | Vitest + RTL tests for pure UI state, validation, rendering, accessibility, `localStorage` and long-list behavior using controlled adapter responses where isolation is intended. |
 | `tests/integration/` | Vitest in Node environment against real `solver-web-adapter` + relocated core; verifies input/result/playback contract, not UI rendering. |
-| `tests/e2e/` | Playwright flows through browser, Server Function and real core against production build or actual Preview. |
+| `tests/e2e/` | Full Playwright regression against local production build/server plus isolated short remote-smoke project against deployed Preview. |
 | `.storybook/` | Storybook configuration and Vitest browser integration. Stories stay beside feature components; they are visual/interaction evidence, not solver or E2E proof. |
 | `public/` | Original PWA icons and network-only service worker only. |
 | repository root | `package.json`, lockfile and Next/TypeScript/Tailwind/ESLint/Vitest/Playwright config. No second app/package. |
@@ -70,9 +70,21 @@ Official Next.js guidance supports putting `app` and application code in `src/`,
 - `npm run test:integration` — Vitest Node project over `tests/integration/` with real adapter/core.
 - `npm run test:storybook` — Storybook Vitest browser project.
 - `npm run storybook` — interactive Storybook server used for agent/browser visual inspection of rendered stories and their `play` interaction sequences.
-- `npm run test:e2e` — Playwright over `tests/e2e/` against production build or `BASE_URL`.
+- `npm run test:e2e` — full Playwright browser scope over `tests/e2e/` against local production build/server; never dev-only.
+- `npm run test:smoke` — short Playwright smoke project from `tests/e2e/` against required deployed `BASE_URL`; never aliases the full suite.
 - `npm run lint`, `npm run typecheck`, `npm run build`, `npm run build:storybook` keep separate failure signals.
 - `npm run verify` runs lint, typecheck, core, unit, integration, Storybook build/tests, Next production build and local production E2E.
+
+### Two-stage release and deployment gate
+
+1. **Pre-deploy local gate:** On exact candidate commit, run all cheaper local levels, Storybook interaction/build plus completed visual evidence, production build, then full `npm run test:e2e` against local production server. `npm run verify` is the single mechanical authorization command; unit/integration success alone never authorizes deployment.
+2. **Deploy exact commit:** Deploy only SHA that passed full local gate without failed, flaky, skipped or unproven checks. Record SHA, immutable Vercel URL and their association.
+3. **Post-deploy remote smoke:** Run only `BASE_URL=<immutable-preview-url> npm run test:smoke`. Smoke proves deployed wiring, not regression breadth; do not rerun full remote suite by default.
+4. **Metrics evidence:** Observe logs and Speed Insights only after smoke passes. Metrics never replace smoke.
+
+Pre-deploy full local E2E covers approved browser scope: browser to Server Function to real core to rendered result; initial/link workflow; cancel/back; pending/solved/unsolvable/already-solved/error; arbitrary-length list/fullscreen/restore; playback to actual last step; mobile/wide; mapped accessibility; PWA online-required behavior. Save exact SHA, production-build result, full Playwright report/artifacts, browsers, viewports and pass status under `docs/superpowers/reviews/gothic-lock-resolver/task-8-release/local/`.
+
+If any local check is failed, flaky or unproven, do not deploy. Repair, rerun narrow failing check, then rerun complete `npm run verify` on resulting commit. If remote smoke fails, capture browser/server/network boundary and logs; repair on new commit, rerun complete local gate, redeploy that SHA and rerun smoke. Deployment protection/auth that prevents smoke is a blocker, never a pass.
 
 Next.js defines unit/component, integration and E2E as distinct purposes and recommends E2E for async Server Components: [Next.js testing guide](https://nextjs.org/docs/app/guides/testing). Its Vitest guide recognizes `__tests__` or colocation; this project chooses one visible `tests/` hierarchy, with only Storybook stories colocated for tooling/visual ownership: [Next.js Vitest guide](https://nextjs.org/docs/app/guides/testing/vitest). Server-only imports receive a build-time guard through `server-only`: [Next.js Server and Client Components](https://nextjs.org/docs/app/getting-started/server-and-client-components).
 
@@ -264,26 +276,31 @@ Next.js defines unit/component, integration and E2E as distinct purposes and rec
 
 ---
 
-### Task 8: Verify Actual Vercel Preview and Delivery Evidence
+### Task 8: Pass Local Release Gate, Deploy Exact Commit, and Smoke Vercel Preview
 
-**Goal / result:** Immutable Preview runs full product through real deployment; Speed Insights records actual baseline; docs match shipped project.
+**Goal / result:** Exact locally proven commit deploys to immutable Vercel Preview, short remote smoke proves critical deployed wiring, then logs/Speed Insights and operator docs record delivery evidence.
 
 **Files:** root verification config, `src/app/` Speed Insights integration, `tests/e2e/`, README/AGENTS and delivery evidence.
+
+**Dependencies:** Tasks 1–7 and both review stages are complete. Their commits, Storybook visual evidence and all local suites are available; Task 8 cannot deploy around an earlier incomplete gate.
 
 **Test cycle:**
 
 - [ ] Add integration guard proving Speed Insights stays in web layout and never enters core.
-- [ ] Configure same Playwright scenarios to use `BASE_URL` without local `webServer`.
-- [ ] Run full local `npm run verify`.
-- [ ] Deploy Vercel Preview; verify browser trigger, Server Function request, real core response and rendered result. If protection is enabled, use automation bypass header without logging secret.
-- [ ] Run complete E2E against Preview: happy path, unsolvable, already-solved, error, cancel/back, known 26-command fixture fullscreen/playback, mobile, PWA offline/reconnect. Treat 26 only as deployed regression data.
-- [ ] Check Preview server logs at each request boundary and stop at first broken boundary instead of continuing past it.
-- [ ] Record real Speed Insights LCP/INP/CLS baseline after data appears; do not invent thresholds.
+- [ ] Add isolated remote smoke project under `tests/e2e/`: deployed page/static assets/manifest load; hydration and one control interaction work; one small valid lock travels through real Server Function/core and renders result; first-to-next playback transition works; console/network has no fatal error.
+- [ ] Run cheaper local gates in order: lint, typecheck, core, unit/component, integration, Storybook interaction/build, inspectable visual evidence, production build.
+- [ ] Run complete local production-like Playwright suite for every mapped browser scenario, browser and viewport; dev server is forbidden.
+- [ ] Save pre-deploy evidence: exact candidate SHA, production build result, complete local E2E report/artifacts, browsers/viewports and clean pass status.
+- [ ] If any local evidence is failed/flaky/unproven, stop before deployment; repair, rerun narrow failure, then rerun full `npm run verify` on new candidate SHA.
+- [ ] Confirm clean working tree, deploy only locally proven SHA as immutable Vercel Preview and record URL-to-SHA association. No different working-tree state or later commit may use that evidence.
+- [ ] Run short `test:smoke` against immutable deployed URL; save smoke report, deployed URL/SHA, console/network summary and relevant logs under `docs/superpowers/reviews/gothic-lock-resolver/task-8-release/remote/`. If Deployment Protection is enabled, use automation bypass secret without logging it; inaccessible deployment is blocked.
+- [ ] If smoke fails, capture first broken boundary and logs, mark version not ready, repair on new commit, repeat full local gate, redeploy and rerun smoke. Do not expand smoke into remote full regression.
+- [ ] After smoke passes, inspect Vercel logs and record real Speed Insights LCP/INP/CLS baseline when data appears; do not invent thresholds or use metrics as smoke substitute.
 - [ ] Update operator docs only after commands and deployed paths are proven.
 
-**Verification:** local `npm run verify`; Preview deploy; `BASE_URL` remote Playwright run; deployment log check; Speed Insights data check.
+**Verification order:** `npm run verify` on exact SHA; deploy same SHA; `BASE_URL=<immutable-preview-url> npm run test:smoke`; deployment log check; Speed Insights observation. Order is mandatory and evidence must make SHA transitions mechanically visible.
 
-**Acceptance evidence:** Preview URL/SHA recorded; remote E2E green; Vercel logs show no Server Function errors; Speed Insights receives real data. This follows Vercel plugin full-story verification: browser, server boundary, core response, rendered UI.
+**Acceptance evidence:** Full local production-like E2E report is green for entire mapped scope; deployed URL maps to same SHA; short remote smoke passes critical page/hydration/Server Function/core/result/playback wiring with no fatal console/network error; Vercel logs show no Server Function error; Speed Insights receives real data. No full remote regression duplication is required by default.
 
 **Commit boundary:** `chore: verify Vercel resolver delivery`
 
@@ -291,17 +308,17 @@ Next.js defines unit/component, integration and E2E as distinct purposes and rec
 
 ## Test Case to User Story to Owner Level Matrix
 
-Each row names concrete proof. Multiple levels have different oracles; none repeats BFS truth outside `node:test` core.
+Each row names concrete proof. Multiple levels have different oracles; none repeats BFS truth outside `node:test` core. Unless a cell explicitly says remote smoke, every Playwright case belongs to full local production-like E2E. Preview runs only critical wiring smoke defined in Task 8.
 
 | Story | Concrete test cases | Owner level and oracle | Why this level |
 |---|---|---|---|
-| SITE-01 | `TC-SITE-01A` main path at phone/tablet/desktop; `01B` same stages/controls each size | Storybook: rendered mobile/wide stage frames and interaction evidence. Playwright: real browser path on three viewports. Preview: production phone + wide smoke. | Storybook owns composition/readability; E2E proves one usable product; Preview proves deployed CSS/assets. |
-| SITE-02 | `TC-SITE-02A` manifest/icons valid; `02B` offline solve shows network requirement; `02C` reconnect solves | Unit: manifest/service-worker policy. Storybook: install/network/offline/reconnect visible states. Playwright: resources and offline/reconnect. Preview: real HTTPS manifest + solve. | Static policy, visible messaging, browser networking and deployment need separate evidence. |
+| SITE-01 | `TC-SITE-01A` main path at phone/tablet/desktop; `01B` same stages/controls each size | Storybook: rendered mobile/wide stage frames and interaction evidence. Local Playwright: real browser path on three viewports. Remote smoke: deployed page loads and hydrates. | Storybook owns composition/readability; local E2E proves one usable product; smoke proves deployed shell wiring without repeating layouts. |
+| SITE-02 | `TC-SITE-02A` manifest/icons valid; `02B` offline solve shows network requirement; `02C` reconnect solves | Unit: manifest/service-worker policy. Storybook: install/network/offline/reconnect visible states. Local Playwright: resources and offline/reconnect. Remote smoke: real HTTPS manifest loads. | Static policy, visible messaging and networking are proven locally; smoke checks only deployed manifest wiring. |
 | SITE-03 | `TC-SITE-03A` explicit stage confirmation; `03B` cancel/back preserves facts | Unit: state transitions. Storybook: rendered confirmation/cancel/back/focus sequence. Playwright: browser path through real Server Function. | Reducer owns state; Storybook owns component interaction/visual focus; E2E proves wiring. |
-| SITE-04 | `TC-SITE-04A` pending; `04B` solved; `04C` unsolvable; `04D` already-solved; `04E` safe error | Unit: render/announce controlled states. Storybook: mobile/wide visual evidence for five states. Integration: real adapter serialization. Playwright: visible terminal paths; pending stays deterministic below E2E. | Each level owns rendering, visual acceptance, contract or real journey without timing-flaky duplication. |
+| SITE-04 | `TC-SITE-04A` pending; `04B` solved; `04C` unsolvable; `04D` already-solved; `04E` safe error | Unit: render/announce controlled states. Storybook: mobile/wide visual evidence. Integration: real adapter serialization. Local Playwright: deterministic pending observation plus all terminal paths against production server. | Each level owns rendering, visual acceptance, contract or full local journey; deployment waits if pending E2E is flaky/unproven. |
 | SITE-05 | `TC-SITE-05A` every command available for short/26/41 samples; `05B` numbering/playback reaches actual last element; `05C` return preserves complete list | Unit: parameterized controlled lengths with no cap. Storybook: list/playback frames through actual last item. Integration: real frames. Playwright: known real-fixture solve/playback. | Controlled data proves length independence; real fixture proves adapter/journey without making 26 a boundary. |
-| SITE-06 | `TC-SITE-06A` approved Gothic states; `06B` no reference/game runtime assets | Storybook: rendered mobile/wide reference comparison and a11y evidence. Unit/build: asset-import guard. Preview: deployed inspection. | Rendered review, deterministic guard and deployment each catch distinct risk. |
-| SITE-07 | `TC-SITE-07A` stable numbering for observed 26 and generated 41 samples; `07B` mobile fullscreen reaches actual last item; `07C` exit restores position and complete result | Core/integration: known real fixture retains observed result. Unit: parameterized fullscreen state. Storybook: open/scroll-to-last/exit at mobile/wide for both long samples. Playwright/Preview: known real mobile fixture. | Parameterized UI evidence rejects hidden caps; real E2E/Preview proves deployed scrolling without declaring fixture length a maximum. |
+| SITE-06 | `TC-SITE-06A` approved Gothic states; `06B` no reference/game runtime assets | Storybook: rendered mobile/wide reference comparison and a11y evidence. Unit/build: asset-import guard. Remote smoke: obvious static assets load without fatal error. | Full visual acceptance remains local/inspectable; smoke checks only deployed asset wiring. |
+| SITE-07 | `TC-SITE-07A` stable numbering for observed 26 and generated 41 samples; `07B` mobile fullscreen reaches actual last item; `07C` exit restores position and complete result | Core/integration: known real fixture retains observed result. Unit: parameterized fullscreen state. Storybook: open/scroll-to-last/exit at mobile/wide for both long samples. Local Playwright: known real mobile fixture. | Parameterized UI evidence rejects hidden caps; full local E2E proves scrolling. Remote smoke intentionally does not repeat this regression. |
 | LOCK-01 | `TC-LOCK-01A` 2/7 plates; `01B` boundaries; `01C` one marker through rerender/playback; `01D` links inactive during input | Core: position/transition semantics. Unit: DOM invariant. Storybook: rendered select/move frames, geometry and one marker at mobile/wide. Playwright: invariant through real playback. | Solver bounds, DOM, visual geometry and full animation require separate oracles. |
 | LOCK-02 | `TC-LOCK-02A` links unavailable early; `02B` confirmation preserves positions | Unit: state gate. Storybook: initial-to-confirmed interaction/focus frames. Playwright: cannot advance early, advances after action. | State machine, component visual transition and browser enforcement are distinct. |
 | LOCK-03 | `TC-LOCK-03A` source confirmation; `03B` active context; `03C` no reverse edge | Unit: state/UI. Storybook: source-selection/confirmation visual sequence. Integration: exact matrix reaches real adapter. | UI logic, visible active context and transport each have one owner. |
@@ -314,13 +331,16 @@ Each row names concrete proof. Multiple levels have different oracles; none repe
 ## Coverage and Self-Review
 
 - All 15 approved stories appear exactly once in matrix; each has concrete case IDs, owner level, oracle and level rationale.
-- `node:test` proves solver semantics/migration parity only. Vitest unit proves UI state/rendering. Integration distinguishes real adapter/core from controlled UI responses. Storybook proves visual states. Playwright proves real browser/Server Function/core paths. Preview/Speed Insights prove deployment-only evidence.
+- `node:test` proves solver semantics/migration parity only. Vitest unit proves UI state/rendering. Integration distinguishes real adapter/core from controlled UI responses. Storybook proves visual states. Full local Playwright proves every browser/Server Function/core path. Remote Preview smoke proves only deployed wiring; Speed Insights adds deployment metrics.
 - Tasks 2–7 each list a non-overlapping Storybook scenario set, require actual running Storybook browser inspection at mobile and wide viewports, and save inspectable review evidence with deviations and repairs.
 - Every visual Task 2–7 verification includes `test:storybook` and `build:storybook`; no visual task may commit on unit/integration/E2E alone or on prose-only “looks good”.
 - Visual evidence checklist covers approved-reference geometry/materials/type/buttons/composition, one marker, clipping/overflow/text, touch targets, focus/keyboard, contrast/a11y addon and reduced motion where animation exists.
 - Storybook visual/reference/a11y failures consume the same maximum three review-repair iterations; unresolved third-cycle failure blocks the task and all dependent tasks.
 - Search Task 5, matrix and Preview steps for any product maximum, `26`-specific UI branch, truncation, silent collapse or required pagination. Every remaining `26` mention must label the known observed fixture; parameterized UI/Storybook evidence must include at least one longer sample.
 - Full-list, fullscreen, return-position and playback acceptance must use actual command-array length and reach its last element for both observed fixture and longer controlled data.
+- Release order is mechanically fixed: all cheaper local gates and visual evidence, production build, full local production-like E2E, deploy exact passing SHA, short remote smoke, then logs/Speed Insights. Unit/integration-only evidence never permits deployment.
+- Search Task 8 and matrix for any full remote-suite default or deploy-before-local-E2E path. Neither may remain; remote smoke must stay limited to page/hydration, one small real solve, first/next playback, static assets/manifest and fatal console/network checks.
+- Failed/flaky/unproven local gate blocks deploy. Failed/protected remote smoke blocks completion and requires a new commit to pass the full local gate before redeploy.
 - Exact final core target: `src/server/solver-core/`. Exact tests hierarchy: `tests/core`, `tests/unit`, `tests/integration`, `tests/e2e`.
 - No ad-hoc top-level application folder, parallel application, Git submodule, second package or permanent CLI surface remains.
 - No task changes solver rules or duplicates solver logic.
