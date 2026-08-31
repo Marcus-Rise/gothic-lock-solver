@@ -1,0 +1,16 @@
+{
+  "name": "gothic-lock-solver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "solve": "node solve-lock.mjs"
+  },
+  "bin": {
+    "gothic-lock-solver": "./solve-lock.mjs"
+  }
+}
