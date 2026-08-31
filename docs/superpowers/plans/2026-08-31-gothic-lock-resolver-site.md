@@ -25,6 +25,9 @@
 - Vite is limited to Vitest/Storybook. Next.js dev/build use Turbopack.
 - No extracted game assets, offline solver, Canvas state, first-run guide, separate device products, new product features or numeric performance budgets.
 - No task introduces a second solver implementation. Core tests prove solver truth; other levels prove their own boundary or user behavior.
+- Solver command-array length has no product maximum. Full list, stable numbering, scrolling, mobile fullscreen, return-position preservation and playback derive from actual returned array length; UI never truncates, silently collapses or stops early.
+- The observed 26-command lock is one known real long fixture, not a boundary. Controlled UI/Storybook coverage also uses generated data longer than 26; that chosen test length is not a new cap.
+- Pagination, extra toggles or virtualization are not v1 requirements. Add optimization only after measured need, without hiding commands or changing result contract.
 
 ## Locked Project Structure
 
@@ -48,7 +51,7 @@ Official Next.js guidance supports putting `app` and application code in `src/`,
 
 - Translate `src/index.mjs`, `lock-definition.mjs`, `result.mjs`, `solver.mjs`, `state-codec.mjs` and `transition.mjs` into six exact files under `src/server/solver-core/`.
 - Preserve algorithm bodies and observable results; make only TypeScript typing and import-path changes required by relocation.
-- Run current legacy suite first and record 37/37 PASS. During migration, compare relocated core against every existing semantic fixture and verified 26-step fixture.
+- Run current legacy suite first and record 37/37 PASS. During migration, compare relocated core against every existing semantic fixture and the known observed 26-command regression fixture.
 - `src/cli.mjs`, root `solve-lock.mjs`, CLI-only formatter/tests, `bin` and `solve` script may exist only as temporary migration adapter inside Task 1. Remove them before Task 1 commit. Final repository exposes only website product.
 - Move surviving semantic assertions into `tests/core/`. Do not move CLI presentation or filesystem behavior into core tests.
 
@@ -105,7 +108,7 @@ Next.js defines unit/component, integration and E2E as distinct purposes and rec
 **Test cycle:**
 
 - [ ] Run untouched baseline: `npm test`; require exactly 37 tests and 37 PASS.
-- [ ] Add RED core migration-parity cases covering validation, transition ordering/blocking, shortest path/tie-breaking, solved/unsolvable/already-open results and 26-step fixture.
+- [ ] Add RED core migration-parity cases covering validation, transition ordering/blocking, shortest path/tie-breaking, solved/unsolvable/already-open results and the known observed 26-command fixture without treating its length as a limit.
 - [ ] Add RED integration cases for valid/invalid requests, solved/unsolvable/already-solved serialization and frame sequence from real adapter/core.
 - [ ] Add RED Playwright walking skeleton: two plates, explicit confirmation, empty links, real Server Function, visible solved result.
 - [ ] Create conventional `src` App Router project and test scripts; translate/move core mechanically; wire server-only adapter and Server Function.
@@ -190,25 +193,26 @@ Next.js defines unit/component, integration and E2E as distinct purposes and rec
 
 ---
 
-### Task 5: Implement Full Result and 26-Step Mobile Fullscreen
+### Task 5: Implement Arbitrary-Length Full Result and Mobile Fullscreen
 
-**Goal / result:** Full stable list always exists; mobile fullscreen scrolls 26 steps and returns without losing result or reading position.
+**Goal / result:** Every returned command remains accessible for any solver-result length; mobile fullscreen scrolls the actual full array and returns without losing result or reading position.
 
-**Files:** `examples/lock.long.json`, `src/features/lock-resolver/`, stories, `tests/core/`, `tests/unit/`, `tests/e2e/`.
+**Files:** `examples/lock.long.json`, `src/features/lock-resolver/`, stories, `tests/core/`, `tests/unit/`, `tests/integration/`, `tests/e2e/`.
 
-**Locked fixture:** `state = [4,7,3,6,5,6]`; `links = [[0,0,-1,0,1,-1],[1,0,0,0,0,-1],[-1,0,0,0,0,-1],[1,1,0,0,0,0],[0,-1,0,1,0,1],[1,0,0,-1,0,0]]`. Real core must return `solved`, 26 commands and final `[4,4,4,4,4,4]`; never store hand-written solution list.
+**Known long fixture:** `state = [4,7,3,6,5,6]`; `links = [[0,0,-1,0,1,-1],[1,0,0,0,0,-1],[-1,0,0,0,0,-1],[1,1,0,0,0,0],[0,-1,0,1,0,1],[1,0,0,-1,0,0]]`. Real core currently returns `solved`, 26 commands and final `[4,4,4,4,4,4]`. This is regression evidence only, never a maximum or UI constant; never store a hand-written solution list.
 
 **Test cycle:**
 
-- [ ] Add core fixture regression for exact 26-command count and final state.
-- [ ] Add Task 5 controlled-response Storybook interactions for short result, full 26-item numbering, mobile fullscreen open/scroll/exit, preserved reading position/focus and full-list access beside playback entry.
-- [ ] Add mobile E2E that enters real fixture, solves through Server Function, opens fullscreen, scrolls, exits and verifies preserved result/position.
-- [ ] Implement fullscreen as view of one result state, separate from playback.
+- [ ] Add real-core integration regression through the web adapter showing the known fixture still returns its observed 26-command result, complete serialized array and final state; assertion documents fixture behavior, not product length.
+- [ ] Add parameterized unit cases using short, observed 26-command and generated 41-command controlled results. Assert every item is present, numbering reaches actual array length and no truncation/collapse/pagination contract appears; 41 is sample data, not a maximum.
+- [ ] Add Task 5 Storybook interactions for the same parameterized lengths: full numbering, mobile fullscreen open/scroll-to-last/exit, preserved reading position/focus and full-list access beside playback entry.
+- [ ] Add mobile E2E that enters the known real fixture, solves through Server Function, opens fullscreen, scrolls through all returned commands, exits and verifies preserved result/position.
+- [ ] Implement full-list/fullscreen state from actual command-array length, separate from playback, with no `26` branch or display cap.
 - [ ] Run Storybook; inspect Task 5 key frames at mobile and wide viewports, including first/middle/last list regions, overflow, readable numbering, touch targets, focus containment/restoration and reduced motion; save screenshots and repair evidence.
 
-**Verification:** `npm run test:core && npm run test:unit && npm run test:storybook && npm run build:storybook && npm run build && npm run test:e2e`.
+**Verification:** `npm run test:core && npm run test:unit && npm run test:integration && npm run test:storybook && npm run build:storybook && npm run build && npm run test:e2e`.
 
-**Acceptance evidence:** Stable numbers before/during/after fullscreen; full list remains reachable; inspectable Storybook evidence proves scroll/readability/focus on both viewports; no duplicate result store.
+**Acceptance evidence:** For observed 26 and generated 41 controlled commands, all elements remain accessible, numbering reaches actual last index, fullscreen scroll/exit/restore works and playback entry retains the same complete result. Inspectable Storybook evidence proves first/middle/last readability on both viewports; no hidden cap, truncation or duplicate result store.
 
 **Commit boundary:** `feat: add long solution list experience`
 
@@ -223,14 +227,14 @@ Next.js defines unit/component, integration and E2E as distinct purposes and rec
 **Test cycle:**
 
 - [ ] Add real-core integration cases proving every serialized frame equals sequential internal `applyCommand`, including sync/reverse links and blocked-frame failure handling.
-- [ ] Add Task 6 controlled-response Storybook interactions for playback start, selected plate, command, before-to-after movement, middle/end boundaries, return to full list, safe blocked-frame error and reduced-motion mode.
+- [ ] Add Task 6 controlled-response Storybook interactions for playback start, selected plate, command, before-to-after movement, middle/end boundaries, return to full list, safe blocked-frame error and reduced-motion mode; long controlled data must reach its actual final frame beyond step 26.
 - [ ] Add E2E completing playback through real Server Function and comparing rendered final positions with returned final state.
 - [ ] Implement client playback over returned frames only.
 - [ ] Run Storybook; agent/browser walks every Task 6 frame at mobile and wide viewports, verifies one marker throughout animation, before/after clarity, focus/keyboard/contrast and reduced-motion fallback; save key screenshots and repairs.
 
 **Verification:** `npm run test:core && npm run test:unit && npm run test:integration && npm run test:storybook && npm run build:storybook && npm run build && npm run test:e2e`.
 
-**Acceptance evidence:** No transition arithmetic in client; Storybook evidence proves one-marker, before/after, focus and reduced-motion behavior across key frames; E2E reaches real final state; playback never hides or mutates full list.
+**Acceptance evidence:** No transition arithmetic in client; Storybook evidence proves one-marker, before/after, focus and reduced-motion behavior and reaches the final frame for data longer than 26; E2E reaches real final state; playback never hides, truncates or mutates full list.
 
 **Commit boundary:** `feat: add interactive solution playback`
 
@@ -272,7 +276,7 @@ Next.js defines unit/component, integration and E2E as distinct purposes and rec
 - [ ] Configure same Playwright scenarios to use `BASE_URL` without local `webServer`.
 - [ ] Run full local `npm run verify`.
 - [ ] Deploy Vercel Preview; verify browser trigger, Server Function request, real core response and rendered result. If protection is enabled, use automation bypass header without logging secret.
-- [ ] Run complete E2E against Preview: happy path, unsolvable, already-solved, error, cancel/back, 26-step fullscreen, playback, mobile, PWA offline/reconnect.
+- [ ] Run complete E2E against Preview: happy path, unsolvable, already-solved, error, cancel/back, known 26-command fixture fullscreen/playback, mobile, PWA offline/reconnect. Treat 26 only as deployed regression data.
 - [ ] Check Preview server logs at each request boundary and stop at first broken boundary instead of continuing past it.
 - [ ] Record real Speed Insights LCP/INP/CLS baseline after data appears; do not invent thresholds.
 - [ ] Update operator docs only after commands and deployed paths are proven.
@@ -295,9 +299,9 @@ Each row names concrete proof. Multiple levels have different oracles; none repe
 | SITE-02 | `TC-SITE-02A` manifest/icons valid; `02B` offline solve shows network requirement; `02C` reconnect solves | Unit: manifest/service-worker policy. Storybook: install/network/offline/reconnect visible states. Playwright: resources and offline/reconnect. Preview: real HTTPS manifest + solve. | Static policy, visible messaging, browser networking and deployment need separate evidence. |
 | SITE-03 | `TC-SITE-03A` explicit stage confirmation; `03B` cancel/back preserves facts | Unit: state transitions. Storybook: rendered confirmation/cancel/back/focus sequence. Playwright: browser path through real Server Function. | Reducer owns state; Storybook owns component interaction/visual focus; E2E proves wiring. |
 | SITE-04 | `TC-SITE-04A` pending; `04B` solved; `04C` unsolvable; `04D` already-solved; `04E` safe error | Unit: render/announce controlled states. Storybook: mobile/wide visual evidence for five states. Integration: real adapter serialization. Playwright: visible terminal paths; pending stays deterministic below E2E. | Each level owns rendering, visual acceptance, contract or real journey without timing-flaky duplication. |
-| SITE-05 | `TC-SITE-05A` full list stays; `05B` command/before/after; `05C` return preserves list | Unit: controlled state. Storybook: list/playback interaction frames and screenshots. Integration: real frames. Playwright: real solve/playback. | State, visual interaction, adapter and full path have distinct oracles. |
+| SITE-05 | `TC-SITE-05A` every command available for short/26/41 samples; `05B` numbering/playback reaches actual last element; `05C` return preserves complete list | Unit: parameterized controlled lengths with no cap. Storybook: list/playback frames through actual last item. Integration: real frames. Playwright: known real-fixture solve/playback. | Controlled data proves length independence; real fixture proves adapter/journey without making 26 a boundary. |
 | SITE-06 | `TC-SITE-06A` approved Gothic states; `06B` no reference/game runtime assets | Storybook: rendered mobile/wide reference comparison and a11y evidence. Unit/build: asset-import guard. Preview: deployed inspection. | Rendered review, deterministic guard and deployment each catch distinct risk. |
-| SITE-07 | `TC-SITE-07A` 26 stable numbers; `07B` mobile fullscreen scroll; `07C` exit restores position | Core: real fixture returns 26. Unit: fullscreen state. Storybook: open/scroll/exit frames at mobile/wide. Playwright: real mobile fixture. Preview: deployed mobile flow. | Core owns count; Storybook owns visual interaction; E2E/Preview own actual scrolling. |
+| SITE-07 | `TC-SITE-07A` stable numbering for observed 26 and generated 41 samples; `07B` mobile fullscreen reaches actual last item; `07C` exit restores position and complete result | Core/integration: known real fixture retains observed result. Unit: parameterized fullscreen state. Storybook: open/scroll-to-last/exit at mobile/wide for both long samples. Playwright/Preview: known real mobile fixture. | Parameterized UI evidence rejects hidden caps; real E2E/Preview proves deployed scrolling without declaring fixture length a maximum. |
 | LOCK-01 | `TC-LOCK-01A` 2/7 plates; `01B` boundaries; `01C` one marker through rerender/playback; `01D` links inactive during input | Core: position/transition semantics. Unit: DOM invariant. Storybook: rendered select/move frames, geometry and one marker at mobile/wide. Playwright: invariant through real playback. | Solver bounds, DOM, visual geometry and full animation require separate oracles. |
 | LOCK-02 | `TC-LOCK-02A` links unavailable early; `02B` confirmation preserves positions | Unit: state gate. Storybook: initial-to-confirmed interaction/focus frames. Playwright: cannot advance early, advances after action. | State machine, component visual transition and browser enforcement are distinct. |
 | LOCK-03 | `TC-LOCK-03A` source confirmation; `03B` active context; `03C` no reverse edge | Unit: state/UI. Storybook: source-selection/confirmation visual sequence. Integration: exact matrix reaches real adapter. | UI logic, visible active context and transport each have one owner. |
@@ -315,6 +319,8 @@ Each row names concrete proof. Multiple levels have different oracles; none repe
 - Every visual Task 2–7 verification includes `test:storybook` and `build:storybook`; no visual task may commit on unit/integration/E2E alone or on prose-only “looks good”.
 - Visual evidence checklist covers approved-reference geometry/materials/type/buttons/composition, one marker, clipping/overflow/text, touch targets, focus/keyboard, contrast/a11y addon and reduced motion where animation exists.
 - Storybook visual/reference/a11y failures consume the same maximum three review-repair iterations; unresolved third-cycle failure blocks the task and all dependent tasks.
+- Search Task 5, matrix and Preview steps for any product maximum, `26`-specific UI branch, truncation, silent collapse or required pagination. Every remaining `26` mention must label the known observed fixture; parameterized UI/Storybook evidence must include at least one longer sample.
+- Full-list, fullscreen, return-position and playback acceptance must use actual command-array length and reach its last element for both observed fixture and longer controlled data.
 - Exact final core target: `src/server/solver-core/`. Exact tests hierarchy: `tests/core`, `tests/unit`, `tests/integration`, `tests/e2e`.
 - No ad-hoc top-level application folder, parallel application, Git submodule, second package or permanent CLI surface remains.
 - No task changes solver rules or duplicates solver logic.
