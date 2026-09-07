@@ -8,7 +8,11 @@
   },
   "scripts": {
     "test": "node --test",
-    "solve": "node solve-lock.mjs"
+    "solve": "node solve-lock.mjs",
+    "benchmark": "node scripts/benchmark.mjs",
+    "build:browser": "node scripts/build-browser.mjs",
+    "verify:browser-bundle": "node scripts/build-browser.mjs --check",
+    "verify:web-core": "node --experimental-vm-modules scripts/verify-web-core.mjs"
   },
   "bin": {
     "gothic-lock-solver": "./solve-lock.mjs"

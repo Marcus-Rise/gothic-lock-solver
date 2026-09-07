@@ -34,7 +34,7 @@ test('validateLockDefinition ignores additional input properties', () => {
 });
 
 for (const [name, value, message] of [
-  ['requires 2 to 7 plates', { state: [4], links: [[0]] }, /от 2 до 7/],
+  ['requires at least two plates', { state: [4], links: [[0]] }, /не менее 2/],
   ['rejects a position outside 1..7', { ...validLock, state: [7, 8, 1] }, /state\[1\]/],
   ['requires a square matrix', { ...validLock, links: [[0], [0], [0]] }, /links\[0\]/],
   ['rejects an unknown coefficient', { ...validLock, links: [[0, 2, 0], [0, 0, 0], [0, 0, 0]] }, /-1, 0 или 1/],
@@ -44,6 +44,15 @@ for (const [name, value, message] of [
     assert.throws(() => validateLockDefinition(value), message);
   });
 }
+
+test('rejects sparse state arrays, matrix rows, and matrix entries', () => {
+  const cases = [
+    { state: [4, , 4], links: validLock.links },
+    { state: validLock.state, links: [validLock.links[0], , validLock.links[2]] },
+    { state: validLock.state, links: [[0, , -1], validLock.links[1], validLock.links[2]] },
+  ];
+  for (const definition of cases) assert.throws(() => validateLockDefinition(definition), LockInputError);
+});
 
 test('parseLockDefinition reports malformed JSON as LockInputError', () => {
   assert.throws(

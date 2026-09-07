@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/Marcus-Rise/gothic-lock-solver",
+  "revision": "a87e739a22ccc4215d6d9b14fa06b0738171cb60",
+  "license": "Apache-2.0",
+  "files": {
+    "src/index.mjs": "927fc5391c8c5f673f52c35d1fd2bd14afa5d47554a7a410dae0d8c03788c90f",
+    "src/lock-definition.mjs": "e87e8eae439601cb93d85e8c5d5314976574ad6c6e595fff98f419ef80623d74",
+    "src/result.mjs": "1a38110c34b696f62b9632cb3de27bb0e07c938cdd11b3ffcb89de8532bf08b0",
+    "src/solver.mjs": "ab7335383670c40ccbe2a53c6591dc67a04b7abda49d44978c9a790938f92dec",
+    "src/state-codec.mjs": "ce37a9ede6b26196fef7b89aa9501fe94c6a18fc4110c1cea394995b053759e4",
+    "src/transition.mjs": "28cf5007a8fd1db9d179bf233d995a5e88f5a6c486bca22395e2ed144cdbd4fd",
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "notes": "Unmodified source snapshots; imports remain relative within this directory. No upstream UnlockMyLoot solver code is included."
+}
