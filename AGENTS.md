@@ -1,90 +1,92 @@
-# AGENTS.md
+# Agent instructions
 
-Этот файл — основная точка входа для coding-agent, работающего с репозиторием.
+## Purpose and authority
 
-## Назначение проекта
+Gothic Lock Solver is a strict TypeScript mathematical library and standalone
+Node.js CLI. The active requirements are in
+[the library specification](docs/superpowers/specs/2026-09-07-typescript-library-design.md).
+The owner approved a migration from the preserved JavaScript reference; old
+specifications and reports are historical, not the active module contract.
 
-`gothic-lock-solver` вычисляет кратчайшую последовательность команд для пластинчатых замков **Gothic 1 Remake**. Текущее приложение — CLI на Node.js; вычислительное ядро подготовлено для повторного использования в будущем сайте.
+Read [README](README.md), [API](docs/api.md), [algorithm](docs/algorithm.md),
+[development](docs/development.md) and relevant tests before changing code.
+Public documentation must be self-contained; access to private owner notes is
+not a development prerequisite. Do not copy private notes into this repository.
 
-## Что прочитать перед изменениями
+## Invariants
 
-1. [README.md](README.md) — пользовательский интерфейс и примеры.
-2. [Спецификацию](docs/superpowers/specs/2026-08-31-gothic-lock-solver.md) — источник требований к механике.
-3. [Спецификацию матричного поиска](docs/superpowers/specs/2026-09-07-matrix-search.md) — обновлённый контракт алгоритма и ресурсов.
-4. [Выполненный план](docs/superpowers/plans/2026-08-31-gothic-lock-solver.md) — архитектурные решения и история реализации.
-5. Тесты изменяемого модуля.
+- At least two plates; numeric pin positions 1–7; goal 4.
+- `links[source][target]` has −1/0/+1 entries and zero diagonal.
+- Direct links apply once; no cascading; the selected plate's effect is implicit.
+- A legal command keeps every affected pin in range throughout the movement.
+- Module commands are zero-based `[index, delta]`, nonzero delta −6…+6.
+- `solveLock(state, links)` has exactly two inputs; no default export.
+- Successful solutions minimize grouped actions. Distinct controls and individual
+  shifts are separate reported metrics, not additional global guarantees.
+- `null` means proved unreachable. Resource exhaustion throws `SearchLimitError`.
+- Inputs are not mutated. Runtime validation and exact integer/rational arithmetic
+  cannot be replaced by assertions, coercions or floating-point tolerances.
 
-Если README, план или код расходятся со спецификацией, приоритет имеет спецификация и подтверждённое тестами поведение.
+## Architecture
 
-## Архитектура
+- `src/index.ts`: public facade and explicit type/error exports.
+- `src/lock-model.ts`: validated immutable input; single owner of input invariants.
+- `src/matrix-analysis.ts`: exact rational Gauss–Jordan analysis.
+- `src/matrix-search.ts`: certificate and exact A*.
+- `src/search-bfs.ts`: exact singular-case fallback.
+- `src/search-limits.ts`: prepared effects, encoding and computation budgets.
+- `src/indexed-heap.ts`: priority queue; `src/indexed.ts`: checked indexed access.
+- `cli/`: Node-only adapter preserving historical console/JSON conventions.
+- `benchmarks/`: pinned fixtures, immutable references, independent replay and reports.
+- `scripts/`: Vite build, consumer verification, benchmarks and release orchestration.
+- `tests/`: behavior, exhaustive oracle, static type, distribution and real browser checks.
 
-- `solve-lock.mjs` — исполняемая точка входа CLI.
-- `src/index.mjs` — стабильный facade для CLI и будущего сайта.
-- `src/lock-definition.mjs` — разбор и валидация модели замка.
-- `src/state-codec.mjs` — base-7 кодирование состояний.
-- `src/transition.mjs` — применение команд и генерация переходов.
-- `src/solver.mjs`, `src/search-bfs.mjs` — точный BFS по действиям.
-- `src/matrix-analysis.mjs`, `src/matrix-search.mjs` — точная матричная подготовка и A*.
-- `src/search-limits.mjs` — отдельные ограничения вычисления.
-- `benchmarks/` — 45 конфигураций, независимая симуляция и закреплённый исходный BFS.
-- `src/result.mjs` — результат, метрики и консольное представление.
-- `src/cli.mjs` — аргументы, файлы и коды завершения.
-- `test/` — модульные, дифференциальные и интеграционные тесты.
-- `.codex/skills/gothic-lock-solver/` — workflow интерактивного решения замка.
+Use composition and small domain objects with clear invariants. Keep exact
+arithmetic as functions where a class adds no state or responsibility. Avoid
+frameworks, duplicate validation policies, abstraction registries and public
+options without a demonstrated requirement. Apply SOLID, KISS, YAGNI and DRY
+proportionately. Test observable behavior, not private implementation inventories.
 
-## Неизменяемые правила модели
+## Changes and verification
 
-- Модель: не менее 2 пластин; позиции каждой — целые числа от `1` до `7`. Ресурсные пределы решателя не являются ограничением игровой механики.
-- Цель — позиция `4` у каждой пластины.
-- Влево означает `+1`, вправо — `-1`.
-- Матрица связей направленная; значения только `-1`, `0`, `1`, диагональ равна `0`.
-- Движение выбранной пластины учитывается отдельно от матрицы.
-- Связи применяются один раз и не каскадируют.
-- Если хотя бы одна затронутая пластина выходит за границы, вся команда блокируется без изменения состояния.
-- Одна команда может сдвигать пластину на `1..6` делений и имеет стоимость `1` для поиска.
-- Главная гарантия обоих режимов — минимум действий. Матричный A* используется по умолчанию; среди равных решений он детерминирован, но не обязан повторять путь BFS.
-- В режиме `bfs` сохраняется прежний порядок: меньшая пластина, `left` перед `right`, большее `steps` перед меньшим.
-- Минимум разных выбранных пластин и единичных сдвигов не является общей гарантией.
-- Исчерпание ресурсов обозначается `SearchLimitError`; оно не означает нерешаемость.
+Start behavioral changes with a failing test and record the relevant red/green
+evidence. Use pnpm and the exact current dependencies in the lockfile. Keep strict
+TypeScript checks and lint warnings-as-errors. No `any`, `@ts-ignore`, non-null
+assertions or unjustified type assertions; `@ts-expect-error` is restricted to
+negative type-contract tests. Use current official tool documentation when an API
+changes. Do not disable library checking to hide dependency declaration defects.
 
-Не изменяй эти правила без явного изменения спецификации и новых тестов.
+Local gates precede workflow edits:
 
-## Правила разработки
-
-- Node.js 20+, JavaScript ESM (`.mjs`), без сторонних runtime-зависимостей.
-- Делай минимальные изменения и сохраняй существующие публичные интерфейсы.
-- Не связывай вычислительное ядро с файловой системой, CLI или UI.
-- Для сайта используй `solveLock` из `src/index.mjs`, а не копию алгоритма.
-- Изменение поведения начинай с теста, воспроизводящего требуемый результат или дефект.
-- Не добавляй `project_sources/`, `upload/`, PDF, временные файлы и секреты в Git.
-- Не редактируй `.env` и не добавляй новые зависимости без явной необходимости.
-- Пользовательские сообщения CLI остаются на русском; JSON-поля и значения направления остаются совместимыми с текущим API.
-
-## Команды
-
-```bash
-# Полная проверка
+```sh
+pnpm install --frozen-lockfile
 pnpm test
-
-# Пример запуска
-node solve-lock.mjs examples/lock.example.json
-
-# JSON-результат
-node solve-lock.mjs examples/lock.example.json --output solution.json
-
-# Бенчмарк 45 замков и отчёт
-pnpm benchmark --output-dir docs/benchmarks
-
-# Граница браузерного ESM-ядра
-pnpm verify:web-core
+pnpm test:coverage
+pnpm benchmark --reference ../unlockmyloot --output-dir artifacts/benchmark
 ```
 
-## Критерии готовности
+Core and shipped CLI coverage must be at least 80% for every coverage metric.
+Every one of the 45 locks must replay legally and retain minimum action counts.
+The independent small-state oracle and all required real browser projects must
+pass. Verify the built files, isolated CLI and clean installed tarball; source-only
+or VM tests do not establish browser/distribution compatibility.
 
-- Все тесты проходят без пропусков.
-- Все 45 конфигураций проверены независимой симуляцией и точным минимумом действий.
-- Отчёт измеряет скорость в миллисекундах; unit tests не имеют нестабильных временных порогов.
-- Новое поведение покрыто тестами.
-- Пример из README соответствует фактическому выводу.
-- Спецификация и публичная документация обновлены при изменении интерфейса.
-- В diff нет PDF, секретов, временных файлов и несвязанных изменений.
+Compare performance against the PR target in the same environment, preserving
+raw samples and noise calibration. Never lower expected action counts or update
+snapshots merely to turn a regression green. An inconclusive timing result stays
+inconclusive. Record exact revisions, artifact hashes and environment details.
+
+An independent reviewer checks the final implementation, tests, mathematical
+claims and owner principles before the draft PR is declared ready for review.
+The reference branch remains unchanged. Do not merge main, publish packages or
+modify the upstream project as part of this migration.
+
+## Repository hygiene
+
+Keep README and current engineering docs in English; preserve Russian CLI output.
+Use the same focused docs from README and this file instead of duplicating a wiki.
+Never commit secrets, uploaded PDFs, `project_sources/`, `upload/`, dependency
+folders or generated build/test artifacts. Do not edit `.env` files. Historical
+benchmark reports and pinned reference sources are intentionally versioned.
+Use official vendor Actions pinned to verified full SHAs, official npm/gh CLIs,
+and standard free public runners. No separate CDN deployment service is needed.

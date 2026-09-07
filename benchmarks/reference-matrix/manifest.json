@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/Marcus-Rise/gothic-lock-solver",
+  "revision": "6b1cfbc13bcec68f609d45d5dc97504dd84f1760",
+  "license": "Apache-2.0",
+  "files": {
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "src/cli.mjs": "a8ca1332163fa5df64387b1fccc985244f07e99664eba463153700ecd4d672b5",
+    "src/index.mjs": "5e3d680cbb1ca7bf9437a3800654bc26b1445ec71994bfc1fc70a7d5381aa6ed",
+    "src/lock-definition.mjs": "cecc13bdb3c760400dda8421e5bdb58e9fdc5bbd46e1782dbd11f94a6de9a8b3",
+    "src/matrix-analysis.mjs": "7262f85ba882cd8a6ea9cb294be2d2f7a22acd16bc3a963744b9edbdce397986",
+    "src/matrix-search.mjs": "b018cfdad21aaf52f4350d5d8f0001afed1b41c44643e7fc8c330e6aca40b1d4",
+    "src/result.mjs": "1a38110c34b696f62b9632cb3de27bb0e07c938cdd11b3ffcb89de8532bf08b0",
+    "src/search-bfs.mjs": "69f253801d4bb36a9db6887a82a668b0a2765fe55c33cdf7c712fe82df128a75",
+    "src/search-limits.mjs": "4a302b500fa41019b1ec3d8f3b86ad28de1e2046a8f9ac7a707608170ce7b569",
+    "src/solver.mjs": "31e3ebfb7035bc57d4c435351642eac0b49820d9ed4682d7eac38b0529dddd29",
+    "src/state-codec.mjs": "ce37a9ede6b26196fef7b89aa9501fe94c6a18fc4110c1cea394995b053759e4",
+    "src/transition.mjs": "28cf5007a8fd1db9d179bf233d995a5e88f5a6c486bca22395e2ed144cdbd4fd"
+  },
+  "notes": "Byte-identical Apache matrix reference, copied from source at the pinned revision. Benchmark-only; excluded from runtime and npm package. No external AGPL solver source."
+}

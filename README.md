@@ -1,231 +1,173 @@
 # Gothic Lock Solver
 
-Решатель пластинчатых замков из **Gothic 1 Remake**. По начальному состоянию и направленной матрице зависимостей программа находит кратчайшую последовательность команд для установки всех пластин в позицию `4`.
+An exact **minimum-action** solver for the coupled plate locks in Gothic 1 Remake.
+A small TypeScript library for browsers, Web Workers and Node.js, with a standalone
+CLI. It has no runtime dependencies.
 
-## Возможности
+One action selects a plate and moves it several positions in one direction.
+The solver minimizes these grouped actions, rather than individual clicks.
+It combines exact matrix analysis, an optimality certificate, A* and a BFS fallback.
+[The algorithm and its proof](docs/algorithm.md) explain the guarantee and its limits.
 
-- от 2 пластин, по 7 позиций у каждой; вычислительные ресурсы ограничены отдельно;
-- направленные синхронные и реверсивные зависимости;
-- атомарная блокировка недопустимого хода;
-- точный матричный анализ и A* с гарантией минимального количества команд;
-- точный BFS для вырожденных матриц и сравнений;
-- 45 каталожных конфигураций, независимые проверки и воспроизводимый бенчмарк;
-- вывод в консоль или JSON-файл;
-- отсутствие сторонних зависимостей.
+> Publication status: this branch prepares the first public release. The package
+> and CDN examples below become available after the first verified npm publication.
+> Replace `VERSION` with an exact published version; these are integration templates.
 
-## Требования
+## Install and import
 
-- Node.js 20 или новее.
-
-Устанавливать пакеты не требуется.
-
-## Формат входного файла
-
-```json
-{
-  "state": [1, 7, 4, 2, 6],
-  "links": [
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0]
-  ]
-}
+```sh
+npm install gothic-lock-solver
 ```
 
-- `state` — текущие позиции пластин от `1` до `7`;
-- `links[i][j] = 1` — пластина `j` движется вместе с выбранной пластиной `i`;
-- `links[i][j] = -1` — пластина `j` движется в противоположном направлении;
-- `links[i][j] = 0` — зависимости нет;
-- диагональ матрицы всегда равна `0`.
+```ts
+import { solveLock } from "gothic-lock-solver";
 
-Влево увеличивает позицию на `1`, вправо уменьшает её на `1`. Цель — состояние `[4, 4, ...]`.
-
-## Пример использования
-
-```bash
-node solve-lock.mjs examples/lock.example.json
+const commands = solveLock([6, 2], [[0, -1], [0, 0]]);
+// [[0, -2]]: decrease pin 0 by two; its reverse link increases pin 1 by two.
 ```
 
-Ответ в консоли:
+A namespace import is also supported:
 
-```text
-Найдено команд: 4
-1. Пластина 1 - влево x3
-2. Пластина 2 - вправо x3
-3. Пластина 4 - влево x2
-4. Пластина 5 - вправо x2
+```ts
+import * as GothicLockSolver from "gothic-lock-solver";
+
+const commands = GothicLockSolver.solveLock([6, 2], [[0, -1], [0, 0]]);
 ```
 
-Для сохранения результата в JSON:
+There is no default export. Type declarations ship with the package.
+[The complete contract](docs/api.md) covers tuple inference, validation and errors.
 
-```bash
-node solve-lock.mjs examples/lock.example.json --output solution.json
+## Use directly in HTML
+
+No build step, package installation or CDN account is required by the integrator.
+The npm package already contains the exact files served by jsDelivr.
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/gothic-lock-solver@VERSION/dist/gothic-lock-solver.min.js"></script>
+<script>
+  const commands = GothicLockSolver.solveLock([6, 2], [[0, -1], [0, 0]]);
+  console.log(commands);
+</script>
 ```
 
-Пример `solution.json`:
-
-```json
-{
-  "status": "solved",
-  "initialState": [1, 7, 4, 2, 6],
-  "targetState": [4, 4, 4, 4, 4],
-  "commands": [
-    {
-      "plate": 1,
-      "direction": "left",
-      "steps": 3
-    },
-    {
-      "plate": 2,
-      "direction": "right",
-      "steps": 3
-    },
-    {
-      "plate": 4,
-      "direction": "left",
-      "steps": 2
-    },
-    {
-      "plate": 5,
-      "direction": "right",
-      "steps": 2
-    }
-  ],
-  "finalState": [4, 4, 4, 4, 4],
-  "metrics": {
-    "commands": 4,
-    "divisions": 10,
-    "plateSwitches": 3
-  }
-}
-```
-
-## Проверка
-
-```bash
-pnpm test
-```
-
-Подробная [спецификация механики](docs/superpowers/specs/2026-08-31-gothic-lock-solver.md)
-и [обновлённый контракт матричного поиска](docs/superpowers/specs/2026-09-07-matrix-search.md)
-находятся в `docs/superpowers`.
-
-## Вычислительное ядро
-
-```js
-import { solveLock, SearchLimitError } from './src/index.mjs';
-
-const definition = { state: [1, 7], links: [[0, 0], [0, 0]] };
-const result = solveLock(definition); // matrix-astar по умолчанию
-const comparison = solveLock(definition, { algorithm: 'bfs' });
-```
-
-Одна команда сдвигает выбранную пластину на `steps` делений и стоит одно действие.
-Оба алгоритма гарантируют минимум действий. Их конкретные последовательности могут
-отличаться. В режиме BFS сохранён прежний порядок выбора: меньший номер пластины,
-`left` перед `right`, большее `steps` перед меньшим. Матричный режим детерминирован,
-но не гарантирует глобальный минимум разных пластин или единичных сдвигов среди
-решений с равным количеством действий.
-
-Начальная матрица задаёт необходимый суммарный баланс сдвигов. A* использует его
-как нижнюю оценку оставшихся действий и проверяет границы каждого перехода.
-Наличие целочисленного решения уравнения само по себе не доказывает возможность
-открыть замок. [Модель и доказательство эвристики](docs/algorithm.md).
-
-`SearchLimitError` означает, что вычисление не укладывается в заданный бюджет или
-представление состояния. Это не результат `unsolvable`. CLI печатает такую ошибку
-на русском и завершается с кодом `1`. Ограничения механики не следует путать
-с возможностями конкретного запуска; стартовая граница будущего интерфейса 8
-не требует жёсткого ограничения модели числом 8.
-
-Бюджеты задаются в том же объекте `options`: `maxVisited` (2 000 000),
-`maxExpanded` (1 000 000), `maxFrontier` (1 000 000), `maxDenseBytes` (64 MiB).
-Последний параметр выбирает плотное или разреженное хранение BFS и не ограничивает
-всю память процесса. [Подробности и сложность](docs/algorithm.md).
-
-## Использование в браузере
-
-Ядро — обычные ES-модули без Node.js API, сети, DOM и сторонних runtime-зависимостей.
-Файлы `src/` можно хранить внутри приложения и импортировать с того же origin:
+For browser modules:
 
 ```html
 <script type="module">
-  import { solveLock } from './src/index.mjs';
-  const result = solveLock({ state: [1, 7], links: [[0, 0], [0, 0]] });
-  console.log(result.commands);
+  import { solveLock } from "https://cdn.jsdelivr.net/npm/gothic-lock-solver@VERSION/dist/gothic-lock-solver.min.mjs";
+  console.log(solveLock([6, 2], [[0, -1], [0, 0]]));
 </script>
 ```
 
-Публикация в npm, внешнее CDN и наш сервер не нужны. Для потенциально тяжёлых
-входов вызывайте синхронный решатель в модульном Web Worker; рабочий пример —
-[`scripts/browser/worker.mjs`](scripts/browser/worker.mjs). Передавайте ему
-`{state, links}` через `postMessage`; он возвращает результат или имя и текст ошибки.
+Pin the full version and file path. The library is synchronous; use a
+[Web Worker](docs/api.md#web-workers) for an interface that must remain responsive
+while solving a difficult lock.
 
-Для страницы без ESM есть готовый файл [`dist/gothic-lock-solver.js`](dist/gothic-lock-solver.js):
+## Contract at a glance
 
-```html
-<script src="./gothic-lock-solver.js"></script>
-<script>
-  const result = GothicLockSolver.solveLock({ state: [1, 7], links: [[0, 0], [0, 0]] });
-</script>
+```ts
+solveLock(state, links): readonly Command[] | null
+// Command = readonly [index: number, delta: -6 | ... | -1 | 1 | ... | 6]
 ```
 
-Скопируйте этот файл рядом с HTML. У принимающего проекта не появятся зависимости
-или этап сборки. Файл не загружает код по сети и не требует ESM-сервера; ограничения
-запуска конкретного браузера через `file://` следует проверять отдельно.
-В нашем репозитории `pnpm build:browser` воспроизводит файл из текущих исходников,
-а `pnpm verify:browser-bundle` проверяет, что он не устарел. Скрипт сборки поддерживает
-только явно разрешённую структуру модулей этого ядра и отвергает неподдерживаемый
-синтаксис импортов и экспортов.
+| Value | Meaning |
+| --- | --- |
+| `state[i]` | Pin position, an integer from 1 to 7; the goal is 4 |
+| `state.length` | Number of plates, at least 2 |
+| `links[source][target]` | Direct influence: −1 reverse, 0 none, +1 same direction |
+| Diagonal | Always 0; the selected plate's own movement is implicit |
+| `[index, delta]` | Zero-based plate index and signed change in numeric pin position |
+| `[]` | Already open |
+| `null` | The target was proved unreachable |
+| `LockInputError` | Invalid values or dimensions |
+| `SearchLimitError` | A computation limit was reached; this does not prove impossibility |
 
-```bash
-pnpm verify:web-core
-python3 -m http.server 8000
+Links do not cascade. Every affected pin must stay in positions 1–7 throughout
+an action. Inputs are copied and never mutated. Positive delta means a higher
+**pin position**; map it to physical left/right in the consuming UI.
+
+The model does not impose an eight-plate maximum. The current state encoding
+supports up to 18 plates, with additional search budgets. Runtime and memory can
+grow exponentially; successful results retain the exact minimum-action guarantee.
+The solver does not promise minimum individual clicks or minimum distinct plates
+among equally short action sequences.
+
+## Choose a distribution file
+
+| File in `dist/` | Use |
+| --- | --- |
+| `gothic-lock-solver.mjs` | Readable ESM, Node.js or browser import |
+| `gothic-lock-solver.min.mjs` | Minified ESM |
+| `gothic-lock-solver.js` | Readable classic browser script, global `GothicLockSolver` |
+| `gothic-lock-solver.min.js` | Minified classic browser script |
+| `gothic-lock-solver.cli.mjs` | Standalone Node.js command-line tool |
+
+Each runtime file is self-contained. The CLI uses only built-in Node.js modules;
+the four core files use no Node.js or DOM APIs, additional chunks or network calls.
+The classic files are IIFEs, not CommonJS modules. Declarations, license and build
+checksums accompany the runtime files.
+
+## Run the CLI
+
+Use a maintained Node.js 22, 24 or 26 release (latest patch recommended). After installing the package, run `gothic-lock-solver`.
+Alternatively, download the CLI release asset and run it directly:
+
+```sh
+node gothic-lock-solver.cli.mjs lock.json --output solution.json
 ```
 
-Первая команда загружает настоящий граф ESM-зависимостей в изолированный JS-контекст
-без `process`, `Buffer` и `require`. Это проверка границы зависимостей, не эмуляция
-браузера. Для проверки в настоящем браузере откройте
-`http://localhost:8000/test/browser-smoke.html`: страница проверяет импорт и решение
-восьмипластинного замка на главном потоке и в модульном Worker.
-HTTP-сервер нужен для ESM; открытие этой страницы через `file://` не поддерживается.
-
-## Бенчмарк и доказательный отчёт
-
-```bash
-pnpm benchmark --output-dir docs/benchmarks
+```json
+{
+  "state": [6, 2],
+  "links": [[0, -1], [0, 0]]
+}
 ```
 
-Запуск проверяет все 45 входов, прогревает реализации, делает повторные измерения
-и создаёт подкаталог `run-*` с JSON и Markdown. Без внешнего checkout сравниваются
-матричный режим, текущий BFS и закреплённый исходный BFS нашего проекта.
-Исторические показатели UnlockMyLoot помечаются отдельно и не выдают себя
-за свежие измерения скорости.
+The CLI retains the original Russian console output and JSON result format.
+Its compatibility adapter uses **one-based plates**, `left` for increasing pin
+position and `right` for decreasing it. The module API uses zero-based tuples.
+Exit codes are `0` for solved, `2` for proved unreachable and `1` for input,
+filesystem or resource errors. No output file is written unless `--output` is
+supplied; an existing output file is replaced. See [CLI details](docs/api.md#cli).
 
-Чтобы сравнить сторонний решатель в том же JS-runtime:
+## Evidence and development
 
-```bash
-git clone https://github.com/1h8s/unlockmyloot.git ../unlockmyloot
-git -C ../unlockmyloot checkout eee0bf50ebcb7fffd2b47954fd76bb015854e365
-pnpm benchmark --reference ../unlockmyloot --repetitions 5 --warmups 1 --output-dir docs/benchmarks
+The test corpus contains all **45 pinned catalog locks**, plus all 441 two-plate
+configurations and 192 reproducible three-plate configurations. An independent
+unit-step simulator checks every returned path; a separate exhaustive oracle
+checks minimum actions on small models.
+
+Validation covers Node.js, real Chromium/Firefox/WebKit, both module bundles,
+both classic bundles, Workers, the installed npm tarball and the standalone CLI.
+Production core and CLI coverage must be at least **80% each for statements,
+branches, functions and lines**. Type checking uses strict TypeScript 7; lint
+warnings are errors.
+
+[Benchmark documentation](benchmarks/README.md) describes the full reports,
+immutable fixtures, paired timing, peak RSS and baseline comparisons.
+Actions, distinct selected plates and individual shifts are reported separately.
+A timing result is `passed`, `regression` or `inconclusive`; noisy measurements
+are not silently declared successful. Machine-specific timings are evidence for
+that environment, not a universal latency promise.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm test
+pnpm test:coverage
+pnpm benchmark --reference ../unlockmyloot --output-dir artifacts/benchmark
 ```
 
-Проверяются закреплённый commit и хэши исходников. Чужая функция исполняется без
-изменения алгоритма; её код не включён в этот репозиторий. Происхождение данных
-каталога сохраняется в `benchmarks/fixtures`.
+Read [development and architecture](docs/development.md),
+[algorithm and complexity](docs/algorithm.md), [release process](docs/releasing.md),
+and [agent instructions](AGENTS.md) before contributing. Local verification
+precedes workflow integration. The reference implementation remains available in
+`feat/matrix-astar-benchmarks` and as a hash-pinned benchmark reference.
 
-Каждый найденный путь воспроизводится независимой симуляцией по одному делению.
-Минимальность количества действий проверяется точным BFS. Отчёт показывает
-действия, разные выбранные пластины, единичные сдвиги, время в **миллисекундах**,
-среду и хэши. Обычные тесты не требуют «быстрее 1 мс»: скорость зависит от машины.
-Для быстрой проверки самого сценария есть `--smoke`; её неполный охват явно указан.
+## Attribution and license
 
-Пример сохранённого полного запуска: [docs/benchmarks](docs/benchmarks).
-Порядок предложения необязательного режима стороннему проекту описан в
-[плане вклада в UnlockMyLoot](docs/upstream-contribution.md).
-
-## Лицензия
-
-[Apache License 2.0](LICENSE)
+Apache-2.0; see [LICENSE](LICENSE). Catalog provenance and hashes are recorded in
+[the fixture manifest](benchmarks/fixtures/manifest.json).
+[Unlock My Loot](https://unlockmyloot.com/) and its
+[source repository](https://github.com/1h8s/unlockmyloot) provide the catalog and
+comparison implementation. Its solver is measured from a separately checked-out,
+pinned upstream revision and is not bundled or republished in this package.

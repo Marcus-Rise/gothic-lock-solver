@@ -1,161 +1,156 @@
-# Модель, оптимальность и пределы вычисления
+# Model, optimality and computational complexity
 
-## Что минимизируется
+## Objective and coordinates
 
-Состояние замка — вектор `x` длины N, где каждое значение находится в `1..7`.
-Матрица интерфейса визуализирует этот вектор; матрица зависимостей `L` имеет размер
-N×N. Строка `L[i]` описывает влияние выбранной пластины i на остальные пластины.
-Связи направленные, не распространяются каскадом, диагональ `L` равна нулю.
+The state is a vector `x` of N integers in 1–7. The UI's grid visualizes this
+vector; the dependency matrix `L` is N×N, with `L[source][target]` describing a
+direct influence. Its diagonal is zero. Effects do not cascade.
 
-Команда `(i, k)`, где `k ∈ {-6,…,-1,1,…,6}`, стоит одно **действие**.
-Она изменяет положение выбранной пластины на k и применяет её прямые связи.
-Каждое промежуточное положение обязано оставаться в `1..7`.
-Недопустимое перемещение блокируется целиком.
+A command `[i, k]`, where `i` is zero-based and `k` is one of −6…−1 or +1…+6,
+costs one **action**. It changes the selected pin and its directly linked pins.
+Every intermediate pin position must remain in 1–7. An illegal action is blocked
+in its entirety.
 
-В отчётах используются отдельные показатели:
+| Metric | Definition |
+| --- | --- |
+| A | Number of commands, or grouped actions |
+| U | Number of distinct selected plates, excluding indirectly affected plates |
+| C | Number of unit shifts: sum of absolute command deltas |
+| Switches | Changes of selected plate between adjacent commands |
 
-| Обозначение | Значение |
-|---|---|
-| A | Количество команд: серий сдвигов выбранной пластины |
-| U | Количество разных выбранных пластин; косвенно затронутые связи не считаются |
-| C | Количество единичных сдвигов: сумма `steps` |
-| plateSwitches | Число смен выбранной пластины между соседними командами |
+A successfully returned solution minimizes A. Minimum U or C among equal-A
+solutions is not a general guarantee. An optimal action sequence never has two
+adjacent commands selecting the same plate: movements in the same direction can
+be combined, and opposite movements can be cancelled. The combined displacement
+still lies within the plate's six-position travel range. Thus a nonempty shortest
+solution has A−1 switches, although it may revisit a plate later and have U<A.
 
-Оба публичных режима гарантируют минимум A при успешном завершении. Минимум U
-или C среди равных по A решений не является общей гарантией. В кратчайшем пути
-не бывает двух соседних команд одной пластины: однонаправленные можно объединить,
-противоположные сократить. Поэтому для непустого кратчайшего решения число
-переключений равно A−1. U при этом может быть меньше A: к пластине иногда нужно
-возвращаться.
+The pinned Unlock My Loot implementation first minimizes C and then A among
+minimum-C paths. A lower action count can therefore come with more unit shifts.
+Neither metric alone measures actual player time, which also depends on controls
+and animation.
 
-UnlockMyLoot на закреплённой версии сначала минимизирует C и затем A среди путей
-с минимальным C. Это другая цель. Меньшее A нашего решения может сопровождаться
-большим C; отчёт показывает обе величины. Число действий также не является прямым
-измерением секунд работы игрока: на него влияют устройство ввода и анимации.
+## The matrix equation
 
-## Матричное уравнение
+Using column vectors, define the effect matrix `M = I + Lᵀ`. One legal command is
 
-Используем векторы-столбцы и матрицу эффектов `M = I + Lᵀ`.
-Тогда допустимая команда имеет вид
-
-```text
-x' = x + k M e_i,   1 ≤ x'_j ≤ 7.
+```math
+x' = x + k M e_i, \qquad 1 \le x'_j \le 7.
 ```
 
-Все компоненты движутся монотонно внутри одной команды, поэтому для известного
-допустимого начала проверка конечных границ эквивалентна проверке каждого деления.
-Независимый проверяющий симулятор всё равно воспроизводит команды по одному делению.
+Each component moves monotonically within a command. From a valid starting state,
+checking its endpoint bounds is therefore equivalent to checking every unit shift.
+The independent test oracle nevertheless replays each shift separately.
 
-Если `z_i` — суммарное знаковое перемещение при выборе пластины i за весь путь,
-то любой успешный путь удовлетворяет
+Let `z_i` be the total signed displacement contributed by selecting plate i along
+the entire solution. Every successful path satisfies
 
-```text
-M z = g − x,   g = (4,…,4),   z ∈ ℤᴺ.
+```math
+Mz = g-x, \qquad g=(4,\ldots,4), \qquad z\in\mathbb{Z}^{N}.
 ```
 
-Это необходимое условие. Оно не определяет допустимый порядок команд.
-Например, у трёх пластин с взаимными реверсивными связями матрица M имеет единицы
-на диагонали и −1 вне диагонали. Из `[1,1,1]` уравнение имеет единственное
-целочисленное решение `z=[−3,−3,−3]`, но ни одна первая команда невозможна.
-Из `[3,1,1]` баланс равен `[−3,−2,−2]`, однако нужны четыре действия:
+This is necessary, but does not supply a legal command order. For three mutually
+reverse-linked plates, M has ones on its diagonal and −1 everywhere else.
+From `[1,1,1]`, the unique integer balance is `[-3,-3,-3]`, yet no first action
+is legal. From `[3,1,1]`, the balance is `[-3,-2,-2]`, but four actions are required:
 
-```text
-[3,1,1] → (1,−2) → [1,3,3] → (3,−2) → [3,5,1]
-        → (2,−2) → [5,3,3] → (1,−1) → [4,4,4].
+| State before | Command | State after |
+| --- | --- | --- |
+| `[3,1,1]` | `[0,-2]` | `[1,3,3]` |
+| `[1,3,3]` | `[2,-2]` | `[3,5,1]` |
+| `[3,5,1]` | `[1,-2]` | `[5,3,3]` |
+| `[5,3,3]` | `[0,-1]` | `[4,4,4]` |
+
+Three nonzero balance components do not guarantee a three-action solution.
+
+## Exact analysis, certificate and search
+
+1. Gauss–Jordan elimination over normalized `BigInt` rational numbers checks
+   consistency without floating-point tolerances. An inconsistent system proves
+   unreachability. For a nonsingular matrix, a unique noninteger balance also
+   proves that no path exists.
+2. A consistent singular system uses exact BFS over legal grouped actions.
+   A particular rational solution cannot exclude other integer solutions.
+3. For a unique integer balance, a sufficient certificate is attempted first.
+   If every `abs(z_i) <= 6` and each nonzero component can be executed as a single
+   legal action, the result reaches the lower bound and is globally optimal.
+   The first currently legal plate by index is selected. Failure of this greedy
+   attempt proves nothing: the complete A* search then starts from the initial state.
+4. A* maintains the residual balance `r = M⁻¹(g−x)` and uses
+
+```math
+h(x) = \sum_i \left\lceil |r_i|/6 ightceil.
 ```
 
-Три ненулевых компоненты баланса не гарантируют путь из трёх действий.
+One action changes only one residual component, by at most six. That component
+requires at least `ceil(abs(r_i)/6)` actions, so h is admissible. It is also
+consistent: `h(x) <= 1 + h(x')` on every edge. Consequently the first goal removed
+from the priority queue has minimum action count, and closed states need not be
+reopened. An indexed heap decreases priorities in place, without retaining stale
+copies of open nodes.
 
-## Точный анализ и A*
+BFS also has unit-cost edges and therefore returns the same minimum A. Its
+neighbor order is ascending plate index, positive then negative displacement,
+and larger displacement first. A* has deterministic ordering but may choose a
+different equal-A path. Only one `solveLock` facade is public; callers do not
+select a search implementation.
 
-1. Гаусс–Жордан над рациональными числами с `BigInt` проверяет совместность
-   уравнения без допусков floating point. Несовместность доказывает отсутствие
-   пути. У невырожденной матрицы единственное дробное решение также исключает путь.
-2. При вырожденной совместной матрице используется точный BFS по действиям.
-   Отдельное рациональное решение в этом случае не даёт основания отвергать
-   все целочисленные решения.
-3. При единственном целочисленном балансе сначала пробуется достаточный сертификат:
-   если все `|z_i| ≤ 6` и удаётся исполнить каждый ненулевой компонент одной
-   допустимой командой, найден глобальный минимум A. Алгоритм выбирает первую
-   доступную пластину по номеру. Неудача этой жадной попытки ничего не доказывает:
-   после неё запускается полный A*.
-4. A* хранит остаточный баланс `r=M⁻¹(g−x)` и использует оценку
+## Complexity
 
-```text
-h(x) = Σ_i ceil(|r_i| / 6).
-```
+Let S=7ᴺ, V≤S be the number of discovered states and Q≤V the maximum frontier.
+A state has at most 6N neighbors: each plate has a total of at most six available
+nonzero displacements across both directions.
 
-За одно действие меняется только один компонент r, максимум на шесть. Для каждого
-компонента потребуется не меньше `ceil(|r_i|/6)` действий, поэтому h допустима.
-Кроме того, `h(x) ≤ 1+h(x')` на любом ребре: оценка согласована. Когда цель впервые
-извлечена из приоритетной очереди, длина пути минимальна. Закрытые состояния
-не требуется открывать повторно. Уменьшение цены открытого состояния выполняется
-в индексированной куче без накопления устаревших копий узлов.
+| Stage | Time | Memory |
+| --- | --- | --- |
+| Rational Gauss–Jordan | O(N³) rational operations | O(N²) rational values |
+| Sufficient certificate | O(N³) worst case | O(N²), including effects |
+| Sparse BFS | O(N²V) | O(V+Q+N²) |
+| Dense BFS | O(S+N²V), including initialization | O(S+Qcap+N²) |
+| A* after matrix analysis | O(N²V+NV log V) | O(NV+N²) |
 
-У BFS каждое ребро тоже стоит одно действие, поэтому он даёт тот же минимум A.
-Для режима `bfs` сохранён порядок перебора исходной версии: номер пластины по
-возрастанию, `left` перед `right`, длина по убыванию. A* использует детерминированный
-порядок, который может дать другой равный по A путь.
+Qcap is the preallocated dense queue capacity, bounded by the search budgets.
+O(N³) rational operations is not O(N³) bit operations: exact arithmetic costs
+increase with numerator/denominator bit length. Search bounds use the usual unit
+cost model for safe JS numbers and expected O(1) Map operations.
 
-## Сложность
+The matrix heuristic reduces search on the benchmark corpus; the exponential
+worst case remains. There is no universal tens-of-milliseconds guarantee.
 
-Пусть S=7ᴺ, V≤S — число обнаруженных состояний, Q≤V — максимальный размер
-очереди поиска. У состояния не больше 6N соседей: для каждой пластины суммарно
-не больше шести допустимых ненулевых сдвигов в обе стороны.
+## Computation limits
 
-| Этап | Время | Память |
-|---|---|---|
-| Рациональный Гаусс–Жордан | O(N³) рациональных операций | O(N²) рациональных чисел |
-| Достаточный сертификат | O(N³) в худшем случае | O(N²) вместе с эффектами |
-| BFS, разреженное хранение | O(N²V) | O(V+Q+N²) |
-| BFS, плотное хранение | O(S+N²V), включая инициализацию | O(S+Qcap+N²) |
-| A* после матричного анализа | O(N²V+NV log V) | O(NV+N²) |
+The domain accepts N≥2. The current base-7 numeric encoding needs a safe integer
+`7 ** N`, allowing N≤18. N≥19 throws `SearchLimitError`, including already open
+inputs. This is a representation limit, not a claimed game limit.
 
-`Qcap` — заранее выделенная ёмкость плотной очереди, ограниченная настройками.
-O(N³) для матрицы не означает O(N³) битовых операций: стоимость точной арифметики
-растёт с разрядностью числителей и знаменателей. Оценки поиска используют обычную
-модель стоимости операций с безопасными JS-числами и ожидаемую O(1) стоимость Map.
+| Internal budget | Default | Meaning |
+| --- | ---: | --- |
+| `maxVisited` | 2,000,000 | Discovered states |
+| `maxExpanded` | 1,000,000 | Expanded states |
+| `maxFrontier` | 1,000,000 | Pending states |
+| `maxDenseBytes` | 67,108,864 | Dense BFS allocation threshold |
 
-Матричная эвристика сокращает перебор на проверяемом наборе, но экспоненциальный
-худший случай остаётся. Она не гарантирует десятки миллисекунд на любом входе.
+These are internal defaults, not a third public options parameter. Dense bytes
+are not a whole-process memory cap: above that allocation threshold BFS uses
+sparse storage. Map objects, A* vectors and engine overhead are controlled
+indirectly by state budgets. Resource exhaustion throws `SearchLimitError`, never
+`null`. The successful certificate also obeys the path-length budget.
 
-## Бюджеты и браузер
+The solver is synchronous and platform-independent. An integrator can put it in
+a Worker to keep a browser interface responsive. Real Chromium, Firefox and
+WebKit tests exercise the unchanged distributed files and Worker imports.
 
-Модель допускает N≥2. Текущая реализация поиска кодирует состояние одним безопасным
-целым JS-числом и требует безопасного `7**N`; это допускает N≤18. Для N≥19
-возникает `SearchLimitError`, включая уже открытый замок. Это ограничение
-представления текущего алгоритма, а не заявленный предел игрового замка.
+## Evidence and scope
 
-| Параметр `solveLock` | По умолчанию | Назначение |
-|---|---:|---|
-| `maxVisited` | 2 000 000 | Обнаруженные состояния |
-| `maxExpanded` | 1 000 000 | Раскрытые состояния |
-| `maxFrontier` | 1 000 000 | Одновременно ожидающие состояния |
-| `maxDenseBytes` | 67 108 864 | Порог выделения плотных буферов BFS |
+Catalog tests independently replay all 45 paths and verify minimum action counts.
+A separate exhaustive oracle checks all 441 two-plate configurations and 192
+seeded three-plate configurations. Counterexamples cover fractional balances,
+inconsistency, singularity, blocked ordering, boundaries and repeated plate use.
 
-`maxDenseBytes` не ограничивает всю память процесса: при превышении этого порога
-BFS выбирает разреженное хранение. Объекты Map, векторы A* и накладные расходы
-движка учитываются косвенно через число состояний, а не точным лимитом байтов.
-Исчерпание бюджета вызывает `SearchLimitError`, никогда не ответ `unsolvable`.
-Успешный сертификат также проверяет бюджет длины своего пути.
-
-Вычислительные модули синхронны и не зависят от Node.js. Для приложения с отзывчивым
-интерфейсом используйте модульный Worker. `pnpm verify:web-core` проверяет настоящий
-граф импортов в изолированном ESM-контексте без Node globals. Это не заменяет
-проверку HTML-примера и Worker в целевых браузерах.
-
-## Что доказывают проверки
-
-- Каталожные тесты сравнивают все 45 конфигураций с точным BFS и воспроизводят
-  команды независимым симулятором.
-- Малые модели сравниваются с независимым полным поиском: все 441 двухпластинных
-  входа и 192 воспроизводимых трёхпластинных входа.
-- Контрпримеры проверяют границы, дробный баланс, несовместность, вырожденность
-  и необходимость повторного выбора пластины.
-- Бенчмарк формирует измерения текущего кода, исходного BFS и, при предоставленном
-  checkout, неизменённого стороннего решателя в одном JS-runtime.
-
-Проверки подтверждают реализацию на выбранных входах; общая гарантия минимума A
-следует из доказательства поиска. Измеренное время относится к указанной машине
-и runtime. Каталог не представляет все возможные конфигурации, а Node.js-замеры
-не являются измерениями Chrome, Firefox, Safari или телефона.
+These tests establish implementation behavior on their inputs. The general
+minimum-A guarantee follows from the search proof, not the number of tests.
+The [benchmark harness](../benchmarks/README.md) compares candidate, preserved
+matrix reference, original BFS and an optional pinned upstream checkout in one
+runtime, with separate timing and process-memory measurements. Reports identify
+the exact sources, machine and runtime; Node measurements are not measurements
+of a phone or browser.

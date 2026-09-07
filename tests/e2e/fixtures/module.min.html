@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <link rel="icon" href="data:,">
+  <title>Plain HTML minified ESM consumer</title>
+  <output id="status">loading</output>
+  <script type="module">
+    import { solveLock } from '../../../dist/gothic-lock-solver.min.mjs';
+    import * as namespace from '../../../dist/gothic-lock-solver.min.mjs';
+    globalThis.consumer = {
+      solveLock,
+      exports: Object.keys(namespace),
+      namedMatchesNamespace: solveLock === namespace.solveLock,
+      hasClassicGlobal: Object.hasOwn(globalThis, 'GothicLockSolver'),
+    };
+    document.querySelector('#status').textContent = 'ready';
+  </script>
+</html>

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <link rel="icon" href="data:,">
+  <title>Plain HTML classic consumer</title>
+  <output id="status">loading</output>
+  <script src="../../../dist/gothic-lock-solver.js"></script>
+  <script>
+    globalThis.consumer = {
+      solveLock: GothicLockSolver.solveLock,
+      exports: Object.keys(GothicLockSolver),
+      namedMatchesNamespace: true,
+      hasClassicGlobal: Object.hasOwn(globalThis, 'GothicLockSolver'),
+    };
+    document.querySelector('#status').textContent = 'ready';
+  </script>
+</html>
