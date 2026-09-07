@@ -1,90 +1,70 @@
-# AGENTS.md
+# Agent instructions
 
-Этот файл — основная точка входа для coding-agent, работающего с репозиторием.
+Read [README](README.md), [API](wiki/api.md), [configuration](wiki/configuration.md),
+[mathematics](wiki/algorithm.md) and relevant tests before editing. The approved
+work is in the [current plan](docs/superpowers/plans/2026-09-07-simplify-library.md).
 
-## Назначение проекта
+## Contract and ownership
 
-`gothic-lock-solver` вычисляет кратчайшую последовательность команд для пластинчатых замков **Gothic 1 Remake**. Текущее приложение — CLI на Node.js; вычислительное ядро подготовлено для повторного использования в будущем сайте.
+- `solveLock(state, links, config?)` returns readonly `[index, delta]` commands.
+- `createSolverConfig(overrides?)` validates settings and fills frozen defaults.
+- Positions 1–7, target 4, at least two plates; source-first matrix, zero diagonal,
+  entries −1/0/+1, direct effects without cascading. Every affected pin stays in range.
+- Commands have zero-based indices and nonzero signed displacement −6…+6.
+  Inputs and caller configuration remain unchanged.
+- Successful paths minimize grouped actions. Do not promise minimum unit shifts,
+  distinct plates or universal timing. `null` is proved unreachable; resource
+  exhaustion throws `SearchLimitError`; invalid lock/config throws `LockInputError`.
+- `src/index.ts` and `src/cli.ts` are the two build entries. CLI invokes the same
+  public solver/factory. Shared mathematics has one implementation.
+- Keep source flat under `src/`; tests in `tests/unit`, `tests/e2e` and
+  `tests/benchmarks`; maintained documentation in `wiki/`. `.github/scripts`
+  contains necessary build/release coordination. Keep only the current plan in `docs/`.
 
-## Что прочитать перед изменениями
+## Engineering
 
-1. [README.md](README.md) — пользовательский интерфейс и примеры.
-2. [Спецификацию](docs/superpowers/specs/2026-08-31-gothic-lock-solver.md) — источник требований к механике.
-3. [Спецификацию матричного поиска](docs/superpowers/specs/2026-09-07-matrix-search.md) — обновлённый контракт алгоритма и ресурсов.
-4. [Выполненный план](docs/superpowers/plans/2026-08-31-gothic-lock-solver.md) — архитектурные решения и история реализации.
-5. Тесты изменяемого модуля.
+Use TDD with observed failing behavior before changes. Tests use independent
+replay and an exhaustive oracle; avoid assertions that mirror private structure.
+Use domain terms and clear invariant ownership. Prefer composition, small stateful
+classes and plain functions over registries, extra layers or helper-file scaffolding.
+Apply SOLID, DRY, KISS and YAGNI proportionately.
 
-Если README, план или код расходятся со спецификацией, приоритет имеет спецификация и подтверждённое тестами поведение.
+Use descriptive domain names and one operation per statement. Give domain bounds,
+byte sizes and sentinel values names; ordinary loop indices need no constant.
+Keep the top-level search/release flow readable in order. Necessary matrix loops
+remain explicit, with short bodies; do not hide them in allocation-heavy pipelines.
+Oxlint limits block nesting to three levels in `src/` and `.github/scripts/`.
+Review responsibilities and data flow as well as tests; passing gates alone does
+not establish maintainability.
 
-## Архитектура
+Use pnpm and exact current stable dependencies with a frozen lockfile. Preserve
+strict TypeScript, checked indexed access, exact optional properties and
+`skipLibCheck: false`. No `any`, non-null assertions, `ts-ignore` or unchecked casts.
+Explained `ts-expect-error` belongs only in negative type tests. Do not patch
+libraries or weaken checks to conceal incompatibilities; verify official APIs.
 
-- `solve-lock.mjs` — исполняемая точка входа CLI.
-- `src/index.mjs` — стабильный facade для CLI и будущего сайта.
-- `src/lock-definition.mjs` — разбор и валидация модели замка.
-- `src/state-codec.mjs` — base-7 кодирование состояний.
-- `src/transition.mjs` — применение команд и генерация переходов.
-- `src/solver.mjs`, `src/search-bfs.mjs` — точный BFS по действиям.
-- `src/matrix-analysis.mjs`, `src/matrix-search.mjs` — точная матричная подготовка и A*.
-- `src/search-limits.mjs` — отдельные ограничения вычисления.
-- `benchmarks/` — 45 конфигураций, независимая симуляция и закреплённый исходный BFS.
-- `src/result.mjs` — результат, метрики и консольное представление.
-- `src/cli.mjs` — аргументы, файлы и коды завершения.
-- `test/` — модульные, дифференциальные и интеграционные тесты.
-- `.codex/skills/gothic-lock-solver/` — workflow интерактивного решения замка.
+## Verification
 
-## Неизменяемые правила модели
+Run focused checks and `pnpm check`, then `pnpm test`. Coverage includes all shipped
+source and requires 80% per metric. Verify Node.js 22/24/26, real Chromium/Firefox/
+WebKit, all five generated files, Workers and an installed archive.
 
-- Модель: не менее 2 пластин; позиции каждой — целые числа от `1` до `7`. Ресурсные пределы решателя не являются ограничением игровой механики.
-- Цель — позиция `4` у каждой пластины.
-- Влево означает `+1`, вправо — `-1`.
-- Матрица связей направленная; значения только `-1`, `0`, `1`, диагональ равна `0`.
-- Движение выбранной пластины учитывается отдельно от матрицы.
-- Связи применяются один раз и не каскадируют.
-- Если хотя бы одна затронутая пластина выходит за границы, вся команда блокируется без изменения состояния.
-- Одна команда может сдвигать пластину на `1..6` делений и имеет стоимость `1` для поиска.
-- Главная гарантия обоих режимов — минимум действий. Матричный A* используется по умолчанию; среди равных решений он детерминирован, но не обязан повторять путь BFS.
-- В режиме `bfs` сохраняется прежний порядок: меньшая пластина, `left` перед `right`, большее `steps` перед меньшим.
-- Минимум разных выбранных пластин и единичных сдвигов не является общей гарантией.
-- Исчерпание ресурсов обозначается `SearchLimitError`; оно не означает нерешаемость.
+Run the [45-input benchmark](wiki/benchmarks.md) without competing heavy jobs.
+Use an independently checked-out actual PR target or verified own previous release.
+Candidate results cannot supply their own baseline. Preserve raw calibration and
+bounded repeats; uncertainty remains inconclusive. Never change expected minima
+or thresholds merely to turn a regression green.
 
-Не изменяй эти правила без явного изменения спецификации и новых тестов.
+All local gates precede workflow edits. Independently review the final diff and
+check hosted CI on the exact head. Working logs/review outputs belong in ignored
+`artifacts/` and CI artifacts. Use official SHA-pinned Actions, npm/gh CLIs and free
+standard runners. Keep the PR draft; merging and publication are separate actions.
 
-## Правила разработки
+## Hygiene
 
-- Node.js 20+, JavaScript ESM (`.mjs`), без сторонних runtime-зависимостей.
-- Делай минимальные изменения и сохраняй существующие публичные интерфейсы.
-- Не связывай вычислительное ядро с файловой системой, CLI или UI.
-- Для сайта используй `solveLock` из `src/index.mjs`, а не копию алгоритма.
-- Изменение поведения начинай с теста, воспроизводящего требуемый результат или дефект.
-- Не добавляй `project_sources/`, `upload/`, PDF, временные файлы и секреты в Git.
-- Не редактируй `.env` и не добавляй новые зависимости без явной необходимости.
-- Пользовательские сообщения CLI остаются на русском; JSON-поля и значения направления остаются совместимыми с текущим API.
-
-## Команды
-
-```bash
-# Полная проверка
-pnpm test
-
-# Пример запуска
-node solve-lock.mjs examples/lock.example.json
-
-# JSON-результат
-node solve-lock.mjs examples/lock.example.json --output solution.json
-
-# Бенчмарк 45 замков и отчёт
-pnpm benchmark --output-dir docs/benchmarks
-
-# Граница браузерного ESM-ядра
-pnpm verify:web-core
-```
-
-## Критерии готовности
-
-- Все тесты проходят без пропусков.
-- Все 45 конфигураций проверены независимой симуляцией и точным минимумом действий.
-- Отчёт измеряет скорость в миллисекундах; unit tests не имеют нестабильных временных порогов.
-- Новое поведение покрыто тестами.
-- Пример из README соответствует фактическому выводу.
-- Спецификация и публичная документация обновлены при изменении интерфейса.
-- В diff нет PDF, секретов, временных файлов и несвязанных изменений.
+Track TypeScript source, fixed test inputs, Wiki and configuration. Do not track
+JavaScript/MJS/MTS sources, copied implementations, builds, result snapshots,
+benchmark reports, coverage, traces, reviewer reports, dependencies, uploaded PDFs
+or credentials. Do not edit `.env` files. Do not reference other solver projects
+in current code, data, docs or the PR description. Official tool documentation
+and this project's own package/repository/CDN URLs remain valid.
