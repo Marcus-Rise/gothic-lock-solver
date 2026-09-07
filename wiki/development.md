@@ -5,10 +5,13 @@ and integrity hashes live in `package.json` and `pnpm-lock.yaml`. Generated
 JavaScript supports Node.js 22/24/26 and ES2022-capable core consumers.
 
 ```sh
+npm install --global --ignore-scripts npm@12.0.2
 pnpm install --frozen-lockfile
 pnpm exec playwright install --with-deps chromium firefox webkit
 pnpm test
 ```
+
+Use npm 12.0.2 for package verification and release preparation, matching CI.
 
 `pnpm test` runs lint, strict types, Node/coverage tests, Vite builds, distribution
 checks, real browsers, static-file E2E and installed-package verification. Coverage

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -110,9 +110,10 @@ export async function prepareArchive(options: Preparation): Promise<{ version: s
       const metadata = archiveMetadata(files, name);
       await writeJson(join(temporary, name), { ...metadata, version });
     }
-    const packed: unknown = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts'], { cwd: temporary, encoding: 'utf8' }));
-    assert.ok(Array.isArray(packed) && packed.length === 1, 'Expected one stable archive');
-    const filename = record(packed[0])['filename'];
+    execFileSync('npm', ['pack', '--ignore-scripts', '--silent'], { cwd: temporary });
+    const archives = (await readdir(temporary)).filter(name => name.endsWith('.tgz'));
+    assert.equal(archives.length, 1, 'Expected one release archive');
+    const filename = archives[0];
     assert.ok(typeof filename === 'string' && /^[A-Za-z0-9_.-]+\.tgz$/.test(filename), 'Invalid packed filename');
     const archive = join(temporary, filename);
     const promoted = archiveFiles(archive);
