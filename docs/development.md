@@ -124,3 +124,12 @@ from README and AGENTS instead of duplicated into another wiki.
 - [Vitest coverage](https://vitest.dev/guide/coverage.html)
 - [Playwright browsers](https://playwright.dev/docs/browsers)
 - [pnpm patched dependencies](https://pnpm.io/settings#patcheddependencies)
+
+## Independent migration review
+
+The [2026-09-07 review](reviews/2026-09-07-principles-review.md) records independent
+checks of the mathematical contract, owner principles, strict TypeScript,
+production consumers and release recovery. It distinguishes executed evidence
+from the future first live npm/OIDC/CDN publication. The all-45 timing report
+remains inconclusive about per-lock speed equivalence; no acceptance is inferred
+from the absence of a confirmed aggregate regression.

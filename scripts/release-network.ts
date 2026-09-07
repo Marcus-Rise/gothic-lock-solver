@@ -79,8 +79,12 @@ export async function completeGithubRelease(directory: string, manifest: Release
     object = record(record(annotated, 'annotated tag')['object'], 'tag target');
   }
   if (object['type'] !== 'commit' || object['sha'] !== manifest.sourceSha) throw new Error('Existing release tag does not identify the prepared source');
-  const releases: unknown = JSON.parse(gh(['api', `repos/${repository}/releases?per_page=100`]));
-  if (!Array.isArray(releases)) throw new Error('Invalid releases response');
+  const pages: unknown = JSON.parse(gh(['api', `repos/${repository}/releases?per_page=100`, '--paginate', '--slurp']));
+  if (!Array.isArray(pages)) throw new Error('Invalid release pages response');
+  const releases: unknown[] = pages.flatMap((page: unknown): unknown[] => {
+    if (!Array.isArray(page)) throw new Error('Invalid releases page');
+    return page;
+  });
   const existing = releases.map(value => record(value, 'release')).find(value => value['tag_name'] === tag);
   if (!existing) {
     gh(['release', 'create', tag, '--repo', repository, '--verify-tag', '--target', manifest.sourceSha, '--draft', '--title', tag,

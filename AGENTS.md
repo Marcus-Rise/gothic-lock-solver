@@ -78,7 +78,8 @@ inconclusive. Record exact revisions, artifact hashes and environment details.
 
 An independent reviewer checks the final implementation, tests, mathematical
 claims and owner principles before the draft PR is declared ready for review.
-The reference branch remains unchanged. Do not merge main, publish packages or
+See the [independent migration review](docs/reviews/2026-09-07-principles-review.md)
+for the recorded checks and their limits. The reference branch remains unchanged. Do not merge main, publish packages or
 modify the upstream project as part of this migration.
 
 ## Repository hygiene

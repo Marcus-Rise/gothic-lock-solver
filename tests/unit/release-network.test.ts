@@ -73,7 +73,7 @@ describe('npm and CDN delivery boundaries', () => {
   });
 });
 
-function mockGithub(directory: string, options: { draft: boolean; missing?: string; tagSha?: string; newer?: boolean }): void {
+function mockGithub(directory: string, options: { draft: boolean; missing?: string; tagSha?: string; newer?: boolean; onSecondPage?: boolean }): void {
   const tag = `v${manifest.version}`;
   const filenames = [...releaseAssets, 'release-manifest.json'];
   const release = { tag_name: tag, draft: options.draft, prerelease: false, assets: filenames.filter(name => name !== options.missing).map(name => ({ name })) };
@@ -83,7 +83,11 @@ function mockGithub(directory: string, options: { draft: boolean; missing?: stri
       const endpoint = args[1] ?? '';
       if (endpoint.includes('matching-refs')) return JSON.stringify([{ ref: `refs/tags/${tag}` }]);
       if (endpoint.includes('/git/ref/tags/')) return JSON.stringify({ object: { type: 'commit', sha: options.tagSha ?? manifest.sourceSha } });
-      if (endpoint.includes('releases?')) return JSON.stringify([release, ...(options.newer ? [{ tag_name: 'v1.1.0', draft: false, prerelease: false }] : [])]);
+      if (endpoint.includes('releases?')) {
+        const firstPage = options.onSecondPage ? Array.from({ length: 100 }, (_, index) => ({ tag_name: `v2.0.0-canary.${index}`, draft: false, prerelease: true })) : [release];
+        const pages = [firstPage, ...(options.onSecondPage ? [[release]] : []), ...(options.newer ? [[{ tag_name: 'v1.1.0', draft: false, prerelease: false }]] : [])];
+        return JSON.stringify(args.includes('--paginate') && args.includes('--slurp') ? pages : firstPage);
+      }
       if (endpoint.includes('/releases/tags/')) return JSON.stringify(release);
     }
     if (args[0] === 'release' && args[1] === 'download') {
@@ -135,6 +139,16 @@ describe('GitHub partial-release recovery', () => {
     try {
       mockGithub(directory, { draft: true, newer: true });
       await completeGithubRelease(directory, manifest, 'owner/repo');
+      expect(command.mock.calls.at(-1)?.[1]).toContain('--latest=false');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('resumes an existing release beyond the first 100 entries without duplicate creation', async () => {
+    const directory = await releaseDirectory();
+    try {
+      mockGithub(directory, { draft: true, onSecondPage: true, newer: true });
+      await completeGithubRelease(directory, manifest, 'owner/repo');
+      expect(command.mock.calls.some(([, args]) => args[0] === 'release' && args[1] === 'create')).toBe(false);
       expect(command.mock.calls.at(-1)?.[1]).toContain('--latest=false');
     } finally { await rm(directory, { recursive: true, force: true }); }
   });

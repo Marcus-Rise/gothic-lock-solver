@@ -12,11 +12,13 @@ The package name was available during planning; that check does not reserve it.
 GitHub and npm account names need not match.
 
 Configure npm trusted publishing for the owner repository, `release.yml` workflow
-and the release environment used by that workflow. Permit direct publication
+and the `npm-production` release environment used by that workflow. Permit direct publication
 in the publisher settings where npm distinguishes staged from direct publishing.
 Use the [official npm instructions](https://docs.npmjs.com/trusted-publishers/).
 Do not put a token in chat or repository files. Once setup is complete, set the
-repository readiness variable `NPM_PUBLICATION_READY=true`.
+repository readiness variable `NPM_PUBLICATION_READY=true`. No npm token is
+required by the OIDC workflow; GitHub supplies its own narrowly scoped
+`GITHUB_TOKEN` for release operations.
 
 The automated release uses official npm CLI 12.0.2 with OIDC and provenance on a
 GitHub-hosted runner. GitHub assets are managed by official GitHub CLI 2.100.0.
@@ -56,10 +58,14 @@ Both calibrated timing and whole-catalog peak-RSS comparisons must pass. An
 inconclusive or regressed performance result requires explicit review of that
 exact evidence, recorded by its SHA256 and a reason. This exception does not
 waive malformed paths, lost solvability, worse deterministic quality or mismatched
-source bytes. Ordinary code changes cannot silently accept their own regression.
+source bytes. The exceptional acceptance settings are repository variables
+`PERFORMANCE_ACCEPTED_EVIDENCE_SHA256` and `PERFORMANCE_ACCEPTANCE_REASON`;
+privileged steps read them independently of the uploaded artifact. Ordinary code changes cannot silently accept their own regression.
 
 ## Stable publication sequence
 
+Each release-producing PR increments the SemVer in `package.json`; versions
+are never inferred from arbitrary commit text or reused for changed files.
 After a future approved merge to main, the workflow validates the exact source
 commit and prepares one immutable candidate:
 

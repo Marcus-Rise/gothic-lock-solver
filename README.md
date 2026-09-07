@@ -143,6 +143,37 @@ Production core and CLI coverage must be at least **80% each for statements,
 branches, functions and lines**. Type checking uses strict TypeScript 7; lint
 warnings are errors.
 
+A [complete measured run](docs/benchmarks/run-20260907T091221367Z-d505e32e/benchmark.md)
+compares all 45 locks on clean source
+[`1651cd4`](https://github.com/Marcus-Rise/gothic-lock-solver/commit/1651cd478b61f368d2fb7ce4cb0f3f644ade4eb9),
+Node.js 24.19.0, Linux and AMD EPYC 9V74:
+
+| Implementation | Actions A | Distinct plates U | Unit shifts C | Sum of per-lock medians |
+| --- | ---: | ---: | ---: | ---: |
+| TypeScript library | 483 | 245 | 1,723 | 47.363 ms |
+| Preserved matrix reference | 483 | 245 | 1,723 | 48.507 ms |
+| Original BFS | 483 | 245 | 1,727 | 2,653.701 ms |
+| Pinned Unlock My Loot | 491 | 245 | 1,695 | 1,517.403 ms |
+
+Against Unlock My Loot, five locks require fewer actions and forty tie, with
+no action-count losses. It optimizes individual shifts first, so its smaller C
+is a different trade-off. The TypeScript migration preserves A/U/C for every
+lock compared with our matrix reference.
+
+Timing against the matrix reference is **inconclusive**: six per-lock comparisons
+passed and thirty-nine remain uncertain. One bounded repeat detected a roughly
+7 μs slowdown on `alberto-mine-hut-chest`; the conflicting attempts are preserved,
+not dismissed. A smaller aggregate does not prove every lock became faster.
+Whole-catalog process-memory comparison passed: median Linux VmHWM was
+90.04 MiB versus 91.45 MiB. This includes Node and the harness, not just solver
+allocations. The time column sums per-lock medians; it is not one measured
+whole-catalog latency.
+
+The [machine-readable evidence](docs/benchmarks/run-20260907T091221367Z-d505e32e/benchmark-evidence.json)
+links the complete raw samples, paths, environment and hashes. Seven timing
+repetitions after two warmups, unchanged controls and bounded repeats make the
+limits of these observations explicit.
+
 [Benchmark documentation](benchmarks/README.md) describes the full reports,
 immutable fixtures, paired timing, peak RSS and baseline comparisons.
 Actions, distinct selected plates and individual shifts are reported separately.

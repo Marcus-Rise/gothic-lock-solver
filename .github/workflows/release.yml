@@ -1,0 +1,344 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Stable main release or an owner-branch canary
+        type: choice
+        options: [canary, stable]
+        default: canary
+        required: true
+      source_branch:
+        description: Owner repository branch for a canary; stable always uses main
+        type: string
+        default: main
+        required: true
+
+permissions:
+  contents: read
+
+# Keep partial releases recoverable; a newer run never cancels publication midway.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  RELEASE_KIND: ${{ github.event_name == 'workflow_dispatch' && inputs.kind || 'stable' }}
+  PERFORMANCE_ACCEPTED_EVIDENCE_SHA256: ${{ vars.PERFORMANCE_ACCEPTED_EVIDENCE_SHA256 }}
+  PERFORMANCE_ACCEPTANCE_REASON: ${{ vars.PERFORMANCE_ACCEPTANCE_REASON }}
+
+jobs:
+  build:
+    name: Build, verify and measure one archive
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      source-sha: ${{ steps.source.outputs.sha }}
+      source-ref: ${{ steps.source.outputs.ref }}
+      input-artifact: release-input-${{ github.run_id }}-${{ github.run_attempt }}
+      benchmark-directory: ${{ steps.report.outputs.directory }}
+    defaults:
+      run:
+        working-directory: candidate
+    steps:
+      - name: Check out trusted main delivery helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          persist-credentials: false
+      - name: Check out owner repository source without publication credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.kind == 'canary' && format('refs/heads/{0}', inputs.source_branch) || github.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Capture immutable source before running candidate code
+        id: source
+        env:
+          SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.kind == 'canary' && inputs.source_branch || 'main' }}
+        run: |
+          git check-ref-format "refs/heads/$SOURCE_BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "ref=refs/heads/$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
+      - name: Check out pinned external upstream
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 1h8s/unlockmyloot
+          ref: eee0bf50ebcb7fffd2b47954fd76bb015854e365
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.23.2
+      - id: node22
+        run: echo "path=$(command -v node)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.8.1
+      - id: node26
+        run: echo "path=$(command -v node)" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.3.4
+          package_json_file: candidate/package.json
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: candidate/pnpm-lock.yaml
+      - name: Install pinned npm and frozen dependencies
+        run: |
+          npm install --global --ignore-scripts npm@12.0.2
+          pnpm install --frozen-lockfile
+      - name: Assign a unique canary version before building
+        if: env.RELEASE_KIND == 'canary'
+        env:
+          RELEASE_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: node ../workflow/scripts/release.ts canary-version
+      - name: Install all actual browsers
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - name: Check source, coverage, all formats and the one packed archive
+        env:
+          NODE22: ${{ steps.node22.outputs.path }}
+          NODE26: ${{ steps.node26.outputs.path }}
+        run: |
+          pnpm check
+          pnpm test:coverage
+          "$NODE26" node_modules/vitest/vitest.mjs run --project node
+          pnpm build
+          pnpm test:distribution
+          pnpm test:browser
+          pnpm test:e2e
+          pnpm verify:package --node "$NODE22" --node "$NODE26"
+      - name: Resolve the preceding stable release from npm and GitHub
+        id: previous
+        run: |
+          version=$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")
+          node ../workflow/scripts/ci-baseline.ts release "$version" artifacts/baseline
+      - name: Check out the explicit first-release reference when needed
+        if: steps.previous.outputs.available != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 3cbbeedbb409a2d8ffa5b00c778cfcb0b07c0ec6
+          path: reference-matrix
+          persist-credentials: false
+      - name: Generate a snapshot from the pinned first-release checkout
+        id: reference
+        if: steps.previous.outputs.available != 'true'
+        run: node ../workflow/scripts/ci-baseline.ts checkout ../reference-matrix artifacts/reference-baseline
+      - name: Measure 45 fixtures against previous stable or explicit reference
+        id: comparison
+        # Keep the measured artifact available. The separate prepare job enforces
+        # quality/performance semantics and exact-evidence acceptance before publish.
+        continue-on-error: true
+        env:
+          BASELINE_MODULE: ${{ steps.previous.outputs.module || steps.reference.outputs.module }}
+          BASELINE_SNAPSHOT: ${{ steps.previous.outputs.snapshot || steps.reference.outputs.snapshot }}
+          BASELINE_FORMAT: ${{ steps.previous.outputs.format || steps.reference.outputs.format }}
+        run: pnpm benchmark:compare --candidate-module dist/gothic-lock-solver.mjs --baseline-module "$BASELINE_MODULE" --baseline-snapshot "$BASELINE_SNAPSHOT" --baseline-format "$BASELINE_FORMAT" --reference ../upstream --output-dir artifacts/benchmark
+      - name: Require one complete evidence set
+        id: report
+        run: |
+          reports=(artifacts/benchmark/run-*)
+          test "${#reports[@]}" -eq 1
+          test -f "${reports[0]}/benchmark-evidence.json"
+          echo "directory=${reports[0]}" >> "$GITHUB_OUTPUT"
+      - name: Preserve immutable raw release inputs before the performance gate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate/package.json
+            candidate/README.md
+            candidate/LICENSE
+            candidate/dist/
+            candidate/artifacts/package/
+            candidate/artifacts/benchmark/
+            candidate/artifacts/baseline/
+            candidate/artifacts/reference-baseline/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Show benchmark and readiness status
+        if: always()
+        env:
+          READY: ${{ vars.NPM_PUBLICATION_READY }}
+        run: |
+          for report in artifacts/benchmark/run-*/benchmark.md; do
+            if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+          for evidence in artifacts/benchmark/run-*/benchmark-evidence.json; do
+            if [ -f "$evidence" ]; then sha256sum "$evidence" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+          if [ "$READY" != true ]; then
+            echo 'Publication is disabled. Complete npm ownership/trusted-publisher bootstrap, then configure NPM_PUBLICATION_READY=true. Prepared evidence remains available.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve test diagnostics even when a check fails
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-checks-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate/coverage/
+            candidate/playwright-report/
+            candidate/test-results/
+            candidate/artifacts/benchmark/
+          if-no-files-found: warn
+          retention-days: 30
+
+  prepare:
+    name: Validate evidence and prepare exact release assets
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      artifact: release-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.input-artifact }}
+          path: candidate
+      - name: Validate the saved evidence without rebuilding or remeasuring
+        id: prepare
+        working-directory: candidate
+        env:
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          BENCHMARK_DIRECTORY: ${{ needs.build.outputs.benchmark-directory }}
+        run: node ../workflow/scripts/release.ts prepare --benchmark-dir "$BENCHMARK_DIRECTORY" --source-sha "$SOURCE_SHA"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/artifacts/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  npm:
+    name: Publish or resume identical npm version
+    needs: [build, prepare]
+    if: vars.NPM_PUBLICATION_READY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_PUBLICATION_READY: ${{ vars.NPM_PUBLICATION_READY }}
+      RELEASE_SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+      RELEASE_SOURCE_REF: ${{ needs.build.outputs.source-ref }}
+      RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - run: npm install --global --ignore-scripts npm@12.0.2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: artifacts/release
+      - run: node scripts/release.ts publish
+      - name: Preserve partial-publication status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-status-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release/delivery-status.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  verify-delivery:
+    name: Verify registry bytes and real CDN browsers
+    needs: [prepare, npm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      artifact: release-verified-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.3.4
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: artifacts/release
+      - run: node scripts/release.ts verify
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-verified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  github:
+    name: Finalize GitHub release with exact verified assets
+    needs: [build, prepare, verify-delivery]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      NPM_PUBLICATION_READY: ${{ vars.NPM_PUBLICATION_READY }}
+      RELEASE_SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+      RELEASE_SOURCE_REF: ${{ needs.build.outputs.source-ref }}
+      RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - name: Install exact official GitHub CLI release
+        env:
+          GH_ARCHIVE_SHA256: e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/gh.tar.gz"
+          echo "$GH_ARCHIVE_SHA256  $RUNNER_TEMP/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/gh.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gh_2.100.0_linux_amd64/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.verify-delivery.outputs.artifact }}
+          path: artifacts/release
+      - name: Verify existing assets or finalize the complete draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.ts github
+      - name: Preserve completion or recovery status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-status-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release/delivery-status.json
+          if-no-files-found: warn
+          retention-days: 30
