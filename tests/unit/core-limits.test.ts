@@ -1,10 +1,12 @@
 import { expect, it } from 'vitest';
 import { SearchLimitError } from '../../src/index.ts';
-import { LockModel } from '../../src/lock-model.ts';
-import { PreparedSearch, SearchBudget, movementLimits } from '../../src/search-limits.ts';
-import { BfsSearch } from '../../src/search-bfs.ts';
-import { MatrixSearch } from '../../src/matrix-search.ts';
-import { analyzeMatrix } from '../../src/matrix-analysis.ts';
+import { LockModel } from '../../src/lock.ts';
+import { PreparedSearch, movementLimits } from '../../src/lock.ts';
+import { SearchBudget } from '../../src/astar.ts';
+import { createSolverConfig } from '../../src/index.ts';
+import { BfsSearch } from '../../src/bfs.ts';
+import { MatrixSearch } from '../../src/astar.ts';
+import { analyzeMatrix } from '../../src/matrix.ts';
 
 it('reports exhaustion separately on BFS, A*, singular fallback and greedy certificate', () => {
   const inputs = [
@@ -15,10 +17,10 @@ it('reports exhaustion separately on BFS, A*, singular fallback and greedy certi
   for (const model of inputs) {
     const prepared = new PreparedSearch(model);
     for (const options of [{ maxExpanded: 0 }, { maxVisited: 1 }]) {
-      expect(() => new MatrixSearch(model, prepared, new SearchBudget(options)).solve()).toThrow(SearchLimitError);
-      expect(() => new BfsSearch(prepared, new SearchBudget(options)).solve()).toThrow(SearchLimitError);
+      expect(() => new MatrixSearch(model, prepared, new SearchBudget(createSolverConfig(options))).solve()).toThrow(SearchLimitError);
+      expect(() => new BfsSearch(prepared, new SearchBudget(createSolverConfig(options))).solve()).toThrow(SearchLimitError);
     }
-    expect(() => new BfsSearch(prepared, new SearchBudget({ maxFrontier: 1 })).solve()).toThrow(SearchLimitError);
+    expect(() => new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxFrontier: 1 }))).solve()).toThrow(SearchLimitError);
   }
 });
 it('dense and sparse BFS preserve exact action order, including wider safe codes', () => {
@@ -26,10 +28,10 @@ it('dense and sparse BFS preserve exact action order, including wider safe codes
   const prepared = new PreparedSearch(model);
   const expected = [[0, 5], [2, 3]];
   expect(new BfsSearch(prepared, new SearchBudget()).solve()).toEqual(expected);
-  expect(new BfsSearch(prepared, new SearchBudget({ maxDenseBytes: 0 })).solve()).toEqual(expected);
+  expect(new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxDenseBytes: 0 }))).solve()).toEqual(expected);
   const state = [1, ...Array.from({ length: 17 }, () => 4)];
   const wide = new PreparedSearch(new LockModel(state, state.map(() => state.map(() => 0))));
-  expect(new BfsSearch(wide, new SearchBudget({ maxDenseBytes: 0, maxVisited: 5, maxExpanded: 1, maxFrontier: 4 })).solve()).toEqual([[0, 3]]);
+  expect(new BfsSearch(wide, new SearchBudget(createSolverConfig({ maxDenseBytes: 0, maxVisited: 5, maxExpanded: 1, maxFrontier: 4 }))).solve()).toEqual([[0, 3]]);
 });
 it('distinguishes exact rational proofs from rank deficiency', () => {
   expect(analyzeMatrix(new LockModel([3, 4], [[0, 1], [-1, 0]])).kind).toBe('noninteger');

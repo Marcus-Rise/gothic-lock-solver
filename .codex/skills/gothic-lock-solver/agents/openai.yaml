@@ -1,4 +1,0 @@
-interface:
-  display_name: "Gothic Lock Solver"
-  short_description: "Собирает модель замка и находит кратчайшую комбинацию"
-  default_prompt: "Помоги описать и решить замок Gothic 1 Remake."

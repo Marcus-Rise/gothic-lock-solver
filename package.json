@@ -7,21 +7,20 @@
     "node": "^22.0.0 || ^24.0.0 || ^26.0.0"
   },
   "scripts": {
-    "lint": "oxlint --deny-warnings src cli scripts tests benchmarks *.ts",
+    "lint": "oxlint --deny-warnings src tests .github/scripts *.ts",
     "typecheck": "tsc --noEmit",
     "check": "pnpm lint && pnpm typecheck",
     "test": "pnpm check && pnpm test:coverage && pnpm build && pnpm test:distribution && pnpm test:browser && pnpm test:e2e && pnpm verify:package",
     "test:node": "vitest run --project node",
     "test:distribution": "vitest run --project distribution",
     "test:browser": "vitest run --project chromium --project firefox --project webkit",
-    "test:e2e": "playwright test",
+    "test:e2e": "node tests/e2e/build-fixtures.ts && playwright test",
     "test:coverage": "vitest run --project node --coverage",
-    "build": "node scripts/build.ts",
-    "verify:package": "node scripts/verify-package.ts",
-    "benchmark": "node scripts/benchmark.ts",
-    "benchmark:compare": "node scripts/benchmark-compare.ts",
-    "benchmark:vitest": "vitest bench --run --project \"node (bench)\"",
-    "solve": "node cli/main.ts"
+    "build": "node .github/scripts/build.ts",
+    "verify:package": "node tests/e2e/verify-package.ts",
+    "benchmark": "node tests/benchmarks/benchmark.ts",
+    "benchmark:compare": "node tests/benchmarks/compare.ts",
+    "solve": "node src/cli.ts"
   },
   "description": "Exact shortest-action solver for Gothic 1 Remake plate locks.",
   "license": "Apache-2.0",

@@ -1,14 +1,15 @@
 import { playwright } from '@vitest/browser-playwright';
-import { defineConfig } from 'vitest/config';
+import type { TestUserConfig } from 'vitest/node';
 
-const shared = ['tests/unit/core*.test.ts', 'tests/browser/*.test.ts'];
+const shared = ['tests/unit/core*.test.ts', 'tests/unit/config.test.ts', 'tests/e2e/browser/*.test.ts'];
 
-export default defineConfig({
+// Plain Vite config keeps test options checked without globally augmenting Vite.
+export default {
   test: {
-    coverage: { provider: 'v8', include: ['src/**/*.ts', 'cli/**/*.ts'], thresholds: { statements: 80, branches: 80, functions: 80, lines: 80 }, reporter: ['text', 'json-summary', 'html'] },
+    coverage: { provider: 'v8', reportsDirectory: 'artifacts/coverage', include: ['src/**/*.ts'], thresholds: { statements: 80, branches: 80, functions: 80, lines: 80 }, reporter: ['text', 'json-summary', 'html'] },
     projects: [
       { test: { name: 'node', environment: 'node', include: [...shared, 'tests/unit/*.test.ts'], testTimeout: 120_000 } },
-      { test: { name: 'distribution', environment: 'node', include: ['tests/distribution/*.test.ts'], testTimeout: 120_000 } },
+      { test: { name: 'distribution', environment: 'node', include: ['tests/e2e/distribution/*.test.ts'], testTimeout: 120_000 } },
       {
         test: {
           include: shared,
@@ -22,5 +23,5 @@ export default defineConfig({
         },
       },
     ],
-  },
-});
+  } satisfies TestUserConfig,
+};

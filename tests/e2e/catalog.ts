@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadCatalog as loadPinnedCatalog } from '../../benchmarks/catalog.ts';
-import { array, replayCommands, tupleCommands } from '../../benchmarks/validation.ts';
+import { loadCatalog as loadPinnedCatalog } from '../benchmarks/catalog.ts';
+import { array, replayCommands, tupleCommands } from '../benchmarks/validation.ts';
 import { distDirectory } from './paths.ts';
 
 export interface CatalogFixture {
@@ -14,10 +14,10 @@ export interface CatalogFixture {
 }
 
 export function loadCatalog(): readonly CatalogFixture[] {
-  return loadPinnedCatalog().map(({ id, definition, expectedActions }) => ({
+  return loadPinnedCatalog().map(({ id, state, links, expectedActions }) => ({
     id,
-    state: definition.state,
-    links: definition.links,
+    state,
+    links,
     expectedActions,
   }));
 }

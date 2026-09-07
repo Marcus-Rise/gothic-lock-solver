@@ -1,4 +1,4 @@
-/** Invalid shape, sparse arrays, positions, coefficients or diagonal values. */
+/** Invalid lock shape, positions, links or solver configuration. */
 export class LockInputError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

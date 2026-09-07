@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { solveLock } from '../../src/index.ts';
 import type { Link, Position } from '../../src/index.ts';
-import { LockModel } from '../../src/lock-model.ts';
-import { PreparedSearch, SearchBudget } from '../../src/search-limits.ts';
-import { BfsSearch } from '../../src/search-bfs.ts';
-import { referenceActions, replay } from '../helpers/oracle.ts';
-import catalog from '../../benchmarks/fixtures/catalog.json' with { type: 'json' };
-import manifest from '../../benchmarks/fixtures/manifest.json' with { type: 'json' };
-import catalogText from '../../benchmarks/fixtures/catalog.json?raw';
+import { LockModel } from '../../src/lock.ts';
+import { PreparedSearch } from '../../src/lock.ts';
+import { SearchBudget } from '../../src/astar.ts';
+import { createSolverConfig } from '../../src/index.ts';
+import { BfsSearch } from '../../src/bfs.ts';
+import { referenceActions, replay } from './oracle.ts';
+import fixtures from '../benchmarks/fixtures.json' with { type: 'json' };
 
 function position(value: number): Position {
   if (value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6 || value === 7) return value;
@@ -45,7 +45,7 @@ describe('independent minimum-action oracle', () => {
       const expected = referenceActions(lock);
       const prepared = new PreparedSearch(new LockModel(state, links));
       const results = [solveLock(state, links), new BfsSearch(prepared, new SearchBudget()).solve(),
-        new BfsSearch(prepared, new SearchBudget({ maxDenseBytes: 0 })).solve()];
+        new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxDenseBytes: 0 }))).solve()];
       for (const result of results) {
         expect(result?.length ?? null, JSON.stringify(lock)).toBe(expected);
         if (result !== null) expect(replay(lock, result)).toEqual([4, 4, 4]);
@@ -54,19 +54,19 @@ describe('independent minimum-action oracle', () => {
   });
 });
 
-describe('preserved catalog', () => {
-  it('keeps all 45 fixtures and the pinned source hash', async () => {
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(catalogText));
+describe('fixed mathematical expectations', () => {
+  it('keeps all 45 numerical configurations and action minima', async () => {
+    const semantics = fixtures.map(({ id, state, links, expectedActions }) => ({ id, state, links, expectedActions }));
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(semantics)));
     const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-    expect(hash).toBe(manifest.catalogSha256);
-    expect(catalog).toHaveLength(45);
-    expect(new Set(catalog.map((entry) => entry.id)).size).toBe(45);
-    expect(manifest.source.revision).toBe('eee0bf50ebcb7fffd2b47954fd76bb015854e365');
+    expect(hash).toBe('22cfb8a9610dd81a487dcecf40420474f9a634916af054622cbfe0ef9fafb4a4');
+    expect(fixtures).toHaveLength(45);
+    expect(new Set(fixtures.map((entry) => entry.id)).size).toBe(45);
   });
-  for (const entry of catalog) {
+  for (const entry of fixtures) {
     it(`${entry.id}: solves in ${entry.expectedActions} actions with legal intermediate moves`, () => {
-      const state = entry.definition.state.map(position);
-      const links = entry.definition.links.map((row) => row.map(link));
+      const state = entry.state.map(position);
+      const links = entry.links.map((row) => row.map(link));
       const before = { state: [...state], links: links.map((row) => [...row]) };
       const result = solveLock(state, links);
       expect(result).toHaveLength(entry.expectedActions);

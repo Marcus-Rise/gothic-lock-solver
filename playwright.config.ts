@@ -8,7 +8,8 @@ export default defineConfig({
   retries: 0,
   workers: 2,
   timeout: 60_000,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [['list'], ['html', { open: 'never', outputFolder: 'artifacts/playwright-report' }]],
+  outputDir: 'artifacts/test-results',
   use: {
     baseURL: 'http://127.0.0.1:4177',
     serviceWorkers: 'block',

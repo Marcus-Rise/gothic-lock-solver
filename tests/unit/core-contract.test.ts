@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as api from '../../src/index.ts';
 import type { Link, Position } from '../../src/index.ts';
-import { referenceActions, replay, unitMove } from '../helpers/oracle.ts';
+import { referenceActions, replay, unitMove } from './oracle.ts';
 
 const inverse = [[0, -1, -1], [-1, 0, -1], [-1, -1, 0]] as const;
 const independent = (state: readonly Position[]) => state.map(() => state.map((): Link => 0));
@@ -11,9 +11,8 @@ function solveUnknown(state: unknown, links: unknown): unknown {
 }
 
 describe('public tuple contract', () => {
-  it('exports only the named solver and documented error classes', () => {
-    expect(Object.keys(api).sort()).toEqual(['LockInputError', 'SearchLimitError', 'solveLock']);
-    expect(api.solveLock.length).toBe(2);
+  it('exports the named solver, config factory and documented error classes', () => {
+    expect(Object.keys(api).sort()).toEqual(['LockInputError', 'SearchLimitError', 'createSolverConfig', 'solveLock']);
   });
   it('uses numeric pin delta and links[source][target] without reverse influence', () => {
     expect(api.solveLock([6, 2], [[0, -1], [0, 0]])).toEqual([[0, -2]]);

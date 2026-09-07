@@ -10,7 +10,3 @@ export type Command = readonly [index: number, delta: Delta];
 export type Links<S extends readonly Position[] = readonly Position[]> = {
   readonly [Row in keyof S]: { readonly [Column in keyof S]: Link };
 };
-
-export interface SearchStrategy {
-  solve(): readonly Command[] | null;
-}

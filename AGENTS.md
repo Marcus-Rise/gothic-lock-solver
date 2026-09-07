@@ -1,93 +1,62 @@
 # Agent instructions
 
-## Purpose and authority
+Read [README](README.md), [API](wiki/api.md), [configuration](wiki/configuration.md),
+[mathematics](wiki/algorithm.md) and relevant tests before editing. The approved
+work is in the [current plan](docs/superpowers/plans/2026-09-07-simplify-library.md).
 
-Gothic Lock Solver is a strict TypeScript mathematical library and standalone
-Node.js CLI. The active requirements are in
-[the library specification](docs/superpowers/specs/2026-09-07-typescript-library-design.md).
-The owner approved a migration from the preserved JavaScript reference; old
-specifications and reports are historical, not the active module contract.
+## Contract and ownership
 
-Read [README](README.md), [API](docs/api.md), [algorithm](docs/algorithm.md),
-[development](docs/development.md) and relevant tests before changing code.
-Public documentation must be self-contained; access to private owner notes is
-not a development prerequisite. Do not copy private notes into this repository.
+- `solveLock(state, links, config?)` returns readonly `[index, delta]` commands.
+- `createSolverConfig(overrides?)` validates settings and fills frozen defaults.
+- Positions 1–7, target 4, at least two plates; source-first matrix, zero diagonal,
+  entries −1/0/+1, direct effects without cascading. Every affected pin stays in range.
+- Commands have zero-based indices and nonzero signed displacement −6…+6.
+  Inputs and caller configuration remain unchanged.
+- Successful paths minimize grouped actions. Do not promise minimum unit shifts,
+  distinct plates or universal timing. `null` is proved unreachable; resource
+  exhaustion throws `SearchLimitError`; invalid lock/config throws `LockInputError`.
+- `src/index.ts` and `src/cli.ts` are the two build entries. CLI invokes the same
+  public solver/factory. Shared mathematics has one implementation.
+- Keep source flat under `src/`; tests in `tests/unit`, `tests/e2e` and
+  `tests/benchmarks`; maintained documentation in `wiki/`. `.github/scripts`
+  contains necessary build/release coordination. Keep only the current plan in `docs/`.
 
-## Invariants
+## Engineering
 
-- At least two plates; numeric pin positions 1–7; goal 4.
-- `links[source][target]` has −1/0/+1 entries and zero diagonal.
-- Direct links apply once; no cascading; the selected plate's effect is implicit.
-- A legal command keeps every affected pin in range throughout the movement.
-- Module commands are zero-based `[index, delta]`, nonzero delta −6…+6.
-- `solveLock(state, links)` has exactly two inputs; no default export.
-- Successful solutions minimize grouped actions. Distinct controls and individual
-  shifts are separate reported metrics, not additional global guarantees.
-- `null` means proved unreachable. Resource exhaustion throws `SearchLimitError`.
-- Inputs are not mutated. Runtime validation and exact integer/rational arithmetic
-  cannot be replaced by assertions, coercions or floating-point tolerances.
+Use TDD with observed failing behavior before changes. Tests use independent
+replay and an exhaustive oracle; avoid assertions that mirror private structure.
+Use domain terms and clear invariant ownership. Prefer composition, small stateful
+classes and plain functions over registries, extra layers or helper-file scaffolding.
+Apply SOLID, DRY, KISS and YAGNI proportionately.
 
-## Architecture
+Use pnpm and exact current stable dependencies with a frozen lockfile. Preserve
+strict TypeScript, checked indexed access, exact optional properties and
+`skipLibCheck: false`. No `any`, non-null assertions, `ts-ignore` or unchecked casts.
+Explained `ts-expect-error` belongs only in negative type tests. Do not patch
+libraries or weaken checks to conceal incompatibilities; verify official APIs.
 
-- `src/index.ts`: public facade and explicit type/error exports.
-- `src/lock-model.ts`: validated immutable input; single owner of input invariants.
-- `src/matrix-analysis.ts`: exact rational Gauss–Jordan analysis.
-- `src/matrix-search.ts`: certificate and exact A*.
-- `src/search-bfs.ts`: exact singular-case fallback.
-- `src/search-limits.ts`: prepared effects, encoding and computation budgets.
-- `src/indexed-heap.ts`: priority queue; `src/indexed.ts`: checked indexed access.
-- `cli/`: Node-only adapter preserving historical console/JSON conventions.
-- `benchmarks/`: pinned fixtures, immutable references, independent replay and reports.
-- `scripts/`: Vite build, consumer verification, benchmarks and release orchestration.
-- `tests/`: behavior, exhaustive oracle, static type, distribution and real browser checks.
+## Verification
 
-Use composition and small domain objects with clear invariants. Keep exact
-arithmetic as functions where a class adds no state or responsibility. Avoid
-frameworks, duplicate validation policies, abstraction registries and public
-options without a demonstrated requirement. Apply SOLID, KISS, YAGNI and DRY
-proportionately. Test observable behavior, not private implementation inventories.
+Run focused checks and `pnpm check`, then `pnpm test`. Coverage includes all shipped
+source and requires 80% per metric. Verify Node.js 22/24/26, real Chromium/Firefox/
+WebKit, all five generated files, Workers and an installed archive.
 
-## Changes and verification
+Run the [45-input benchmark](wiki/benchmarks.md) without competing heavy jobs.
+Use an independently checked-out actual PR target or verified own previous release.
+Candidate results cannot supply their own baseline. Preserve raw calibration and
+bounded repeats; uncertainty remains inconclusive. Never change expected minima
+or thresholds merely to turn a regression green.
 
-Start behavioral changes with a failing test and record the relevant red/green
-evidence. Use pnpm and the exact current dependencies in the lockfile. Keep strict
-TypeScript checks and lint warnings-as-errors. No `any`, `@ts-ignore`, non-null
-assertions or unjustified type assertions; `@ts-expect-error` is restricted to
-negative type-contract tests. Use current official tool documentation when an API
-changes. Do not disable library checking to hide dependency declaration defects.
+All local gates precede workflow edits. Independently review the final diff and
+check hosted CI on the exact head. Working logs/review outputs belong in ignored
+`artifacts/` and CI artifacts. Use official SHA-pinned Actions, npm/gh CLIs and free
+standard runners. Keep the PR draft; merging and publication are separate actions.
 
-Local gates precede workflow edits:
+## Hygiene
 
-```sh
-pnpm install --frozen-lockfile
-pnpm test
-pnpm test:coverage
-pnpm benchmark --reference ../unlockmyloot --output-dir artifacts/benchmark
-```
-
-Core and shipped CLI coverage must be at least 80% for every coverage metric.
-Every one of the 45 locks must replay legally and retain minimum action counts.
-The independent small-state oracle and all required real browser projects must
-pass. Verify the built files, isolated CLI and clean installed tarball; source-only
-or VM tests do not establish browser/distribution compatibility.
-
-Compare performance against the PR target in the same environment, preserving
-raw samples and noise calibration. Never lower expected action counts or update
-snapshots merely to turn a regression green. An inconclusive timing result stays
-inconclusive. Record exact revisions, artifact hashes and environment details.
-
-An independent reviewer checks the final implementation, tests, mathematical
-claims and owner principles before the draft PR is declared ready for review.
-See the [independent migration review](docs/reviews/2026-09-07-principles-review.md)
-for the recorded checks and their limits. The reference branch remains unchanged. Do not merge main, publish packages or
-modify the upstream project as part of this migration.
-
-## Repository hygiene
-
-Keep README and current engineering docs in English; preserve Russian CLI output.
-Use the same focused docs from README and this file instead of duplicating a wiki.
-Never commit secrets, uploaded PDFs, `project_sources/`, `upload/`, dependency
-folders or generated build/test artifacts. Do not edit `.env` files. Historical
-benchmark reports and pinned reference sources are intentionally versioned.
-Use official vendor Actions pinned to verified full SHAs, official npm/gh CLIs,
-and standard free public runners. No separate CDN deployment service is needed.
+Track TypeScript source, fixed test inputs, Wiki and configuration. Do not track
+JavaScript/MJS/MTS sources, copied implementations, builds, result snapshots,
+benchmark reports, coverage, traces, reviewer reports, dependencies, uploaded PDFs
+or credentials. Do not edit `.env` files. Do not reference other solver projects
+in current code, data, docs or the PR description. Official tool documentation
+and this project's own package/repository/CDN URLs remain valid.

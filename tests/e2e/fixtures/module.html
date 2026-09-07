@@ -4,15 +4,5 @@
   <link rel="icon" href="data:,">
   <title>Plain HTML ESM consumer</title>
   <output id="status">loading</output>
-  <script type="module">
-    import { solveLock } from '../../../dist/gothic-lock-solver.mjs';
-    import * as namespace from '../../../dist/gothic-lock-solver.mjs';
-    globalThis.consumer = {
-      solveLock,
-      exports: Object.keys(namespace),
-      namedMatchesNamespace: solveLock === namespace.solveLock,
-      hasClassicGlobal: Object.hasOwn(globalThis, 'GothicLockSolver'),
-    };
-    document.querySelector('#status').textContent = 'ready';
-  </script>
+  <script type="module" src="./module.mjs"></script>
 </html>

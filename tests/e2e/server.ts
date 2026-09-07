@@ -16,12 +16,14 @@ const fixtureFiles = [
   'classic.html',
   'classic.min.html',
   'worker.html',
-  'worker.mjs',
-  'worker.min.mjs',
+
 ];
+const generatedFiles = ['module.mjs', 'module.min.mjs', 'worker.mjs', 'worker.min.mjs', 'classic.js', 'classic.min.js'];
+const generated = new URL('../../artifacts/e2e/fixtures/', import.meta.url);
 const paths = new Set([
   ...runtimeFiles.map((file) => `/dist/${file}`),
   ...fixtureFiles.map((file) => `/tests/e2e/fixtures/${file}`),
+  ...generatedFiles.map((file) => `/tests/e2e/fixtures/${file}`),
 ]);
 
 // Starting this server never builds or transforms the artifacts being tested.
@@ -52,7 +54,9 @@ const server = createServer((request, response) => {
   }
   const file = pathname.startsWith('/dist/')
     ? join(distDirectory, pathname.slice('/dist/'.length))
-    : new URL(pathname.slice(1), root);
+    : generatedFiles.includes(pathname.split('/').at(-1) ?? '')
+      ? new URL(pathname.split('/').at(-1) ?? '', generated)
+      : new URL(pathname.slice(1), root);
   void readFile(file).then((bytes) => {
     response.writeHead(200, {
       'Content-Type': pathname.endsWith('.html')

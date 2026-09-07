@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertDigest, assertReleaseSource, canaryVersion, parseReleaseVersion, previousStableVersion, shouldPromoteGithubLatest, validateManifest, validateEvidenceGate } from '../../scripts/release-lib.ts';
+import { assertDigest, assertReleaseSource, canaryVersion, parseReleaseVersion, previousStableVersion, shouldPromoteGithubLatest, validateManifest, validateEvidenceGate } from '../../.github/scripts/release-lib.ts';
 
 describe('release identity and publication guards', () => {
   it('accepts stable SemVer and rejects aliases, leading zeros, and shell text', () => {

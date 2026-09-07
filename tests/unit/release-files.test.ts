@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { prepareRelease, verifyBenchmarkEvidence, verifyPreparedRelease } from '../../scripts/release-files.ts';
-import { releaseAssets, sha256 } from '../../scripts/release-lib.ts';
+import { prepareRelease, verifyBenchmarkEvidence, verifyPreparedRelease } from '../../.github/scripts/release-files.ts';
+import { releaseAssets, sha256 } from '../../.github/scripts/release-lib.ts';
 
 async function createPreparedFixture() {
   const root = await mkdtemp(join(tmpdir(), 'gothic-release-test-'));

@@ -47,8 +47,11 @@ function exerciseConsumer(fixtures: readonly CatalogFixture[]) {
   if (typeof solveLock !== 'function') {
     throw new Error('Missing public solveLock function');
   }
+  const factory: unknown = Reflect.get(consumer, 'createSolverConfig');
+  if (typeof factory !== 'function') throw new Error('Missing configuration factory');
+  const config: unknown = Reflect.apply(factory, undefined, [{ maxDenseBytes: 0 }]);
   const invoke = (state: unknown, links: unknown): unknown => Reflect.apply(
-    solveLock, undefined, [state, links],
+    solveLock, undefined, [state, links, config],
   );
   const publicExports: unknown = Reflect.get(consumer, 'exports');
   const namedMatchesNamespace: unknown = Reflect.get(consumer, 'namedMatchesNamespace');
@@ -61,6 +64,8 @@ function exerciseConsumer(fixtures: readonly CatalogFixture[]) {
   }
   return {
     publicExports,
+    config,
+    configFrozen: Object.isFrozen(config),
     namedMatchesNamespace,
     hasClassicGlobal,
     signed: invoke([6, 2], [[0, -1], [0, 0]]),
@@ -92,6 +97,9 @@ for (const format of formats) {
 
     const result = await page.evaluate(exerciseConsumer, catalog);
     expect(result.publicExports).toContain('solveLock');
+    expect(result.publicExports).toContain('createSolverConfig');
+    expect(result.config).toEqual({ maxVisited: 2_000_000, maxExpanded: 1_000_000, maxFrontier: 1_000_000, maxDenseBytes: 0 });
+    expect(result.configFrozen).toBe(true);
     expect(result.publicExports).not.toContain('default');
     expect(result.namedMatchesNamespace).toBe(true);
     expect(result.hasClassicGlobal).toBe(format.classic);
@@ -115,6 +123,7 @@ for (const format of formats) {
     expect(observed.requests.sort()).toEqual([
       `http://127.0.0.1:4177${fixturePath}`,
       `http://127.0.0.1:4177${bundlePath}`,
+      `http://127.0.0.1:4177/tests/e2e/fixtures/${format.fixture.replace('.html', format.classic ? '.js' : '.mjs')}`,
     ].sort());
   });
 }
@@ -167,12 +176,15 @@ for (const minified of [false, true]) {
       const html = await readFile(new URL(`./fixtures/${fixtureName}`, import.meta.url), 'utf8');
       await writeFile(join(isolatedDirectory, fixtureName), html.replace('src="../../../dist/', 'src="./'));
       await copyFile(join(distDirectory, bundleName), join(isolatedDirectory, bundleName));
+      const consumerName = `classic${suffix}.js`;
+      await copyFile(new URL(`../../artifacts/e2e/fixtures/${consumerName}`, import.meta.url), join(isolatedDirectory, consumerName));
+      const consumerUrl = pathToFileURL(join(isolatedDirectory, consumerName)).href;
       const fixtureUrl = pathToFileURL(join(isolatedDirectory, fixtureName)).href;
       const bundleUrl = pathToFileURL(join(isolatedDirectory, bundleName)).href;
       await page.goto(fixtureUrl);
       await expect(page.locator('#status')).toHaveText('ready');
       expect(page.url()).toBe(fixtureUrl);
-      const externalScript = page.locator('script[src]');
+      const externalScript = page.locator('script[src]').first();
       await expect(externalScript).toHaveCount(1);
       await expect(externalScript).toHaveJSProperty('src', bundleUrl);
       await expect(externalScript).toHaveJSProperty('type', '');
@@ -186,7 +198,7 @@ for (const minified of [false, true]) {
       expect(observed.failures).toEqual([]);
       // Firefox does not emit request events for file:// loads. Verify the actual
       // local document/script above, and reject unexpected URLs when events exist.
-      const allowedRequests = new Set([fixtureUrl, bundleUrl]);
+      const allowedRequests = new Set([fixtureUrl, bundleUrl, consumerUrl]);
       expect(observed.requests.filter((url) => !allowedRequests.has(url))).toEqual([]);
     } finally {
       await rm(isolatedDirectory, { recursive: true, force: true });

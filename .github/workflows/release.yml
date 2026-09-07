@@ -65,13 +65,6 @@ jobs:
           git check-ref-format "refs/heads/$SOURCE_BRANCH"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "ref=refs/heads/$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
-      - name: Check out pinned external upstream
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: 1h8s/unlockmyloot
-          ref: eee0bf50ebcb7fffd2b47954fd76bb015854e365
-          path: upstream
-          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.23.2
@@ -100,7 +93,7 @@ jobs:
         if: env.RELEASE_KIND == 'canary'
         env:
           RELEASE_SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: node ../workflow/scripts/release.ts canary-version
+        run: node ../workflow/.github/scripts/release.ts canary-version
       - name: Install all actual browsers
         run: pnpm exec playwright install --with-deps chromium firefox webkit
       - name: Check source, coverage, all formats and the one packed archive
@@ -120,7 +113,7 @@ jobs:
         id: previous
         run: |
           version=$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")
-          node ../workflow/scripts/ci-baseline.ts release "$version" artifacts/baseline
+          node ../workflow/.github/scripts/ci-baseline.ts release "$version" artifacts/baseline
       - name: Check out the explicit first-release reference when needed
         if: steps.previous.outputs.available != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -131,7 +124,7 @@ jobs:
       - name: Generate a snapshot from the pinned first-release checkout
         id: reference
         if: steps.previous.outputs.available != 'true'
-        run: node ../workflow/scripts/ci-baseline.ts checkout ../reference-matrix artifacts/reference-baseline
+        run: node ../workflow/.github/scripts/ci-baseline.ts checkout ../reference-matrix artifacts/reference-baseline
       - name: Measure 45 fixtures against previous stable or explicit reference
         id: comparison
         # Keep the measured artifact available. The separate prepare job enforces
@@ -141,7 +134,7 @@ jobs:
           BASELINE_MODULE: ${{ steps.previous.outputs.module || steps.reference.outputs.module }}
           BASELINE_SNAPSHOT: ${{ steps.previous.outputs.snapshot || steps.reference.outputs.snapshot }}
           BASELINE_FORMAT: ${{ steps.previous.outputs.format || steps.reference.outputs.format }}
-        run: pnpm benchmark:compare --candidate-module dist/gothic-lock-solver.mjs --baseline-module "$BASELINE_MODULE" --baseline-snapshot "$BASELINE_SNAPSHOT" --baseline-format "$BASELINE_FORMAT" --reference ../upstream --output-dir artifacts/benchmark
+        run: pnpm benchmark:compare --candidate-module dist/gothic-lock-solver.mjs --baseline-module "$BASELINE_MODULE" --baseline-snapshot "$BASELINE_SNAPSHOT" --baseline-format "$BASELINE_FORMAT" --output-dir artifacts/benchmark
       - name: Require one complete evidence set
         id: report
         run: |
@@ -184,9 +177,9 @@ jobs:
         with:
           name: release-checks-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            candidate/coverage/
-            candidate/playwright-report/
-            candidate/test-results/
+            candidate/artifacts/coverage/
+            candidate/artifacts/playwright-report/
+            candidate/artifacts/test-results/
             candidate/artifacts/benchmark/
           if-no-files-found: warn
           retention-days: 30
@@ -218,7 +211,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
           BENCHMARK_DIRECTORY: ${{ needs.build.outputs.benchmark-directory }}
-        run: node ../workflow/scripts/release.ts prepare --benchmark-dir "$BENCHMARK_DIRECTORY" --source-sha "$SOURCE_SHA"
+        run: node ../workflow/.github/scripts/release.ts prepare --benchmark-dir "$BENCHMARK_DIRECTORY" --source-sha "$SOURCE_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-prepared-${{ github.run_id }}-${{ github.run_attempt }}
@@ -254,7 +247,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact }}
           path: artifacts/release
-      - run: node scripts/release.ts publish
+      - run: node .github/scripts/release.ts publish
       - name: Preserve partial-publication status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -290,7 +283,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact }}
           path: artifacts/release
-      - run: node scripts/release.ts verify
+      - run: node .github/scripts/release.ts verify
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-verified-${{ github.run_id }}-${{ github.run_attempt }}
@@ -333,7 +326,7 @@ jobs:
       - name: Verify existing assets or finalize the complete draft
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release.ts github
+        run: node .github/scripts/release.ts github
       - name: Preserve completion or recovery status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
