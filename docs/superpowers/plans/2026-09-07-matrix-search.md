@@ -51,12 +51,14 @@
 
 - [x] Document algorithm choice, exact objective, changed deterministic tie policy, resource errors, N>=2 versus implementation capacity, browser ESM and Worker usage.
 - [x] Add commands for unit tests, benchmark and browser verification. Verify actual ESM dependency graph in a browser-like restricted environment; perform a real browser import when available.
-- [ ] Run full tests and one repeated comparison against pinned UnlockMyLoot checkout, preserving report in docs/benchmarks. Inspect every action metric and aggregate; no claims derived from stale historical timing.
+- [x] Run full tests and one repeated comparison against pinned UnlockMyLoot checkout, preserving report in docs/benchmarks. Inspect every action metric and aggregate; no claims derived from stale historical timing.
 - [x] Obtain independent code review with spec and full diff. Address material findings and rerun only covering checks before final full gate.
-- [ ] Commit and push the feature to user's GitHub repository; return reviewable branch/PR and measured outcomes. Keep upstream submission as a separate step after our project records the result.
+- [x] Commit and push the feature to user's GitHub repository; return reviewable branch/PR and measured outcomes. Keep upstream submission as a separate step after our project records the result.
 
 ## Verification notes
 
 - Independent reviews of the production search and benchmark harness found no material defects.
 - Added a reproducible classic-script distribution for the requested no-build upstream variant; source synchronization and isolated execution are tested.
 - A real browser attempt could not load the workspace HTTP server (`net::ERR_BLOCKED_BY_CLIENT`). ESM and classic-script VM checks passed, but actual browser/Worker verification is not claimed.
+
+- Final own-project test gate: 113/113 passed. Published core tree matches the tested local tree exactly. Full45 benchmark at clean published commit `6b1cfbc13bcec68f609d45d5dc97504dd84f1760` passed; report stored in `docs/benchmarks/run-20260907T070258001Z-f78dff13`.
