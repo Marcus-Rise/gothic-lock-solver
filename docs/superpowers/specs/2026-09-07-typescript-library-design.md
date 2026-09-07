@@ -179,6 +179,47 @@ TypeScript `>=4.8.4 <6.1.0`; это несовместимо с требован
 Среда разработки — актуальный Node.js LTS, поддерживаемый всем инструментарием;
 начальная CI-матрица runtime — Node.js 24 и 26 с закреплением версий.
 
+### GitHub Actions: только официальные актуальные подключения
+
+По явному требованию пользователя каждый внешний `uses:` ссылается на Action,
+поддерживаемый автором соответствующего сервиса или инструмента. Владение
+репозиторием и статус поддержки проверяются по официальным источникам.
+Marketplace badge сам по себе не заменяет эту проверку.
+
+- GitHub: `actions/checkout`, `actions/setup-node`, `actions/upload-artifact`
+  и `actions/download-artifact` там, где этап действительно использует artifacts.
+- pnpm: официальный `pnpm/action-setup` для установки менеджера пакетов.
+- npm-публикация: официальный npm CLI с OIDC; отдельная Action-обёртка не нужна.
+- GitHub Releases: официальный GitHub CLI `gh` для draft, assets и финализации.
+- Playwright/Vitest запускаются официальными CLI из закреплённых зависимостей.
+
+На момент добавления/обновления выбирается последний стабильный релиз каждого
+Action. В workflow сохраняется его полный commit SHA из исходного репозитория,
+рядом комментарий с точным release tag. Таким образом, повторный запуск использует
+ту же реализацию Action. Плавающие main/master/latest и prerelease не используются.
+Если latest требует обновления среды, обновляется поддерживаемая среда;
+версия Action не понижается молча ради старого runner.
+
+Проверка официальных GitHub `releases/latest` и соответствующих tags на 2026-09-07:
+
+| Action | Стабильный релиз | Commit SHA |
+|---|---|---|
+| actions/checkout | [v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| actions/setup-node | [v7.0.0](https://github.com/actions/setup-node/releases/tag/v7.0.0) | `820762786026740c76f36085b0efc47a31fe5020` |
+| actions/upload-artifact | [v7.0.1](https://github.com/actions/upload-artifact/releases/tag/v7.0.1) | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
+| actions/download-artifact | [v8.0.1](https://github.com/actions/download-artifact/releases/tag/v8.0.1) | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
+| pnpm/action-setup | [v6.1.0](https://github.com/pnpm/action-setup/releases/tag/v6.1.0) | `ea17c68df8912ef543352723c149a84f56e3d413` |
+
+Перед реализацией refs перепроверяются. Выбирается актуальная основная линия для
+github.com; более поздняя дата backport-релиза для GHES не делает его нужной версией.
+
+Dependabot готовит PR для обновления GitHub Actions и зависимостей; обновлённые
+SHA/версии проходят обычные обязательные проверки. Конфигурация и журнал выпуска
+фиксируют фактические версии Actions и CLI. Наличие инструмента в runner image
+само по себе не доказывает, что его версия последняя: версия проверяется при
+реализации и закрепляется. Устаревшие официальные Actions и сторонние обёртки
+не добавляются ради формального использования `uses:` вместо команды.
+
 ## Четыре распространяемых файла
 
 | Файл | Подключение |
@@ -273,18 +314,69 @@ Agent Browser рассмотрен отдельно: это CLI управлен
 - Для сравнения используется baseline целевой ветки PR, чтобы candidate не мог
   скрыть ухудшение простым изменением собственного ожидаемого файла.
 
-## CI, GitHub Releases и доставка в браузер
+## CI, npm, GitHub Releases и доставка в браузер
 
 PR запускает lint, typecheck, unit/integration, сборку, тесты dist/E2E и сравнение
 бенчмарка. JSON/Markdown, покрытие и четыре файла доступны как CI artifacts.
 Документируется одна команда локальной полной проверки и отдельные команды этапов.
 PR не публикует боевой `latest` и не получает права деплоя.
 
-**Канонический выпуск — GitHub Release.** Pages из предлагаемой схемы убран.
-После будущего слияния в `main` workflow проверяет точный merge commit, создаёт
-draft release, прикладывает четыре runtime-файла, декларации, контрольные суммы
-и `benchmark-evidence.json`. Краткая таблица изменений из evidence попадает
-в release notes. Затем после обязательных проверок draft публикуется.
+**Последнее требование пользователя: публичный npmjs.org, затем GitHub Release.**
+Публичный пакет в npmjs.org предназначен для установки и скачивания tarball.
+GitHub хранит исходники, CI и релизы с готовыми файлами и доказательным отчётом.
+Сторонний CDN, GitHub Packages, Pages и отдельная ветка `distribution` исключены.
+Исходная идея прямого `<script src>` на файл из npmjs.org технически не обеспечивается:
+официальный registry отдаёт metadata и архив пакета, а не публичный endpoint
+распакованного JavaScript. В этом варианте браузерный интегратор размещает один
+выбранный файл на своём существующем сайте. Это следствие выбранной доставки,
+которое должно быть явно согласовано; реестр не объявляется браузерным CDN.
+
+После будущего слияния в `main` workflow проверяет точный merge commit. Для выпуска
+используется одна согласованная SemVer-версия в package.json, npm и GitHub tag.
+Имя npm-пакета и права на его scope проверяются до первой публикации;
+совпадение GitHub username с npm username не предполагается.
+
+Последовательность выпуска:
+
+1. Пройти обязательные проверки и benchmark gates, собрать четыре runtime-файла
+   один раз; упаковать готовый dist с декларациями, package.json, README и лицензией.
+   Установка готового пакета не запускает сборку. Пакет не включает каталог
+   тестовых замков, внешнее сравниваемое решение и подробные benchmark runs.
+2. Установить подготовленный tarball в чистый тестовый проект и проверить публичный
+   импорт, типы и четыре формата. Записать контрольные суммы. Сборка при публикации
+   повторно не запускается; в npm и Release передаются те же проверенные байты.
+3. Опубликовать проверенный tarball как public package в npmjs.org. Планируем
+   GitHub Actions trusted publishing через OIDC на GitHub-hosted runner,
+   с provenance для публичного пакета из публичного репозитория. Настройка
+   npm trusted publisher должна разрешать прямой publish для выбранного workflow.
+   Зависимости, сборка и тесты остаются на pnpm; шаг OIDC-публикации использует
+   актуальный npm CLI по официальному контракту npm trusted publishing.
+   Владение пакетом и первоначальная настройка аккаунта выполняются перед
+   первым выпуском, не считаются уже выполненными и не требуют передачи токена в чат.
+4. Скачать опубликованный tarball по точной версии, проверить integrity и
+   совпадение четырёх файлов с проверенной сборкой. Проверить установку и импорт
+   опубликованного пакета в чистом проекте без npm-авторизации.
+5. После успешной npm-публикации создать GitHub draft release. Приложить четыре
+   runtime-файла из того же tarball, декларации, контрольные суммы и
+   `benchmark-evidence.json`. Проверить комплектность и опубликовать Release.
+   В release notes — ссылка на точную npm-версию, source SHA и отчёт о сравнении
+   с предыдущим стабильным выпуском, включая явный verdict о регрессии/дрейфе.
+
+Публикация npm и GitHub не является общей атомарной транзакцией. Если после
+публикации npm проверка пакета или завершение GitHub Release не удались, workflow
+сохраняет явный статус частичного выпуска и допускает продолжение с проверкой
+идентичности существующего пакета. Он не перепубликует ту же npm-версию и не
+удаляет её автоматически. Изменение байтов требует новой версии; временный сбой
+доставки допускает ограниченный повтор проверки. До завершения всех этапов выпуск
+не объявляется полностью готовым.
+
+Стабильный выпуск связан со слиянием в main, использует стабильную SemVer-версию
+и npm dist-tag `latest`. Обычные PR/ветки сохраняют проверенные CI artifacts.
+Опциональная канарейка — отдельный ручной запуск для выбранной ветки владельца,
+уникальная prerelease-версия с SHA/номером запуска и отдельный npm tag `canary`.
+Канарейка не изменяет `latest`, предыдущий стабильный benchmark baseline или
+GitHub latest release; если для неё создаётся GitHub Release, он помечается
+prerelease. Публичная публикация не запускается автоматически для каждого PR.
 
 Пятый evidence-файл не является зависимостью ядра и не загружается потребителем
 при solveLock. У него версионированная JSON-схема: версия выпуска/source SHA,
@@ -299,40 +391,36 @@ verdict и ссылки/хэши подробного отчёта. Для пе�
 включены immutable releases, весь набор assets прикладывается до публикации.
 Неизменяемость не объявляется настроенной без проверки фактической настройки.
 
-**GitHub Packages рассмотрен и не выбран:** его npm registry требует
-аутентификацию даже для установки public packages. Это не анонимный endpoint
-для браузерного `<script src>` и не решает текущую задачу лучше Releases.
+Потребитель выбирает один из двух способов:
 
-Release asset URL предназначен для скачивания. Для ESM нужны подходящие итоговые
-MIME/CORS заголовки после redirects; наличие `.mjs` или указанного при upload
-content type само по себе этого не гарантирует. Поэтому документация разделяет
-два способа употребления:
-
-1. Скачать один выбранный файл из Release и разместить рядом с HTML/проектом.
-   Никаких npm, Pages, сборки или стороннего CDN у потребителя.
+1. Установить публичный пакет из npmjs.org через pnpm/npm и импортировать solveLock
+   по имени пакета. Публичная установка не требует npm-токена. TypeScript получает
+   декларации; пакет имеет явный ESM export. Classic IIFE не выдаётся за CommonJS.
+2. Скачать выбранный файл из GitHub Release и разместить рядом с HTML/проектом.
+   Также можно скопировать его из установленного npm-пакета. Для сайта достаточно
+   добавить один готовый файл в vendor и вызвать API; сборка сайта не требуется.
    Node.js импортирует локальный `.mjs`; поддержка прямого HTTPS-import стандартным
-   Node loader не входит в контракт.
-2. Для прямой удалённой ссылки предлагается jsDelivr с GitHub origin — это
-   явно сторонний CDN. Те же проверенные байты четырёх файлов сохраняются
-   в отдельной ветке `distribution` нашего репозитория. URL закрепляет её
-   конкретный commit SHA, а не изменяемое имя ветки:
-   `https://cdn.jsdelivr.net/gh/Marcus-Rise/gothic-lock-solver@<distribution-sha>/gothic-lock-solver.min.mjs`.
+   Node loader не входит в контракт. Release asset URL документируется как ссылка
+   скачивания. Скрипт на сайте подключается по URL, который обслуживает сам сайт.
 
-jsDelivr `/gh/` читает файлы git tree, а не отдельно приложенные Release assets.
-Distribution commit связан с source commit и release через manifest; проверяется
-побайтная идентичность Release/CDN файлов. История distribution сохраняется,
-чтобы старые SHA-ссылки оставались доступными. Source-ветка содержит TypeScript,
-конфигурацию и принятые benchmark snapshots. npm-публикация не требуется.
+Пример classic-подключения уже скачанного файла:
 
-CDN-вариант является предложением для согласования в этой спецификации.
-Он не называется нативным CDN GitHub. Если требуется только инфраструктура
-GitHub, без Pages и стороннего CDN, гарантируем download/self-host сценарий,
-а не неподтверждённый прямой ESM-import из Release URL.
+```html
+<script src="./vendor/gothic-lock-solver.min.js"></script>
+<script>
+  const commands = GothicLockSolver.solveLock([6, 2], [[0, -1], [0, 0]]);
+</script>
+```
 
-После публикации проверяются реальные CDN URL: JavaScript MIME для `.mjs`, CORS
-с другого origin, SHA256, импорт обоих ESM и загрузка обоих classic scripts.
-До этого удалённое подключение не объявляется готовым. Release notes приводят
-раздельные ссылки «скачать» и «подключить» с закреплёнными версиями.
+Второй вариант использует локальный `.mjs` в `script type="module"` через import.
+Все четыре формата проверяются на статическом HTTP-сервере в реальных браузерах;
+это проверка файлов потребителя, а не обещание удалённого CDN. Обновление интеграции
+означает явную замену версии/файла, откат — возврат к прежней проверенной сборке.
+
+Файл evidence остаётся отдельным Release asset и не входит в runtime-загрузку.
+Манифест контрольных сумм связывает npm-версию и source SHA с байтами runtime-файлов.
+Release notes содержат ссылку на npm-версию, команду установки, ссылки скачивания
+и примеры подключения локального файла.
 
 ## Документация и приёмка
 
@@ -344,8 +432,8 @@ AGENTS.md описывает реальные модули, инварианты
 
 Готовность подтверждается проходящим CI нового PR, проверкой всех 45 входов,
 принятыми performance-результатами, тестами всех публикуемых форматов и понятным
-планом первого выпуска. До согласованного merge публичная CDN-публикация не
-объявляется выполненной.
+планом первого выпуска. До согласованного merge стабильная публикация npm/Release
+не выполняется; настройка канареек также не считается уже выполненной публикацией.
 
 ## Основания
 
@@ -361,9 +449,14 @@ AGENTS.md описывает реальные модули, инварианты
 - [Agent Browser](https://github.com/vercel-labs/agent-browser)
 - [Vitest Playwright provider](https://vitest.dev/config/browser/playwright)
 - [TypeScript strict](https://www.typescriptlang.org/tsconfig/strict.html)
-- [GitHub Packages permissions](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages)
+- [Публичные npm-пакеты](https://docs.npmjs.com/about-public-packages/)
+- [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/)
+- [npm publish: tarball и неизменяемость версии](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+- [GitHub Actions: закрепление SHA и обновления](https://docs.github.com/en/actions/reference/security/secure-use)
+- [Официальный GitHub CLI: создание Release](https://cli.github.com/manual/gh_release_create)
 - [GitHub Release assets](https://docs.github.com/en/rest/releases/assets)
 - [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
-- [jsDelivr GitHub delivery](https://github.com/jsdelivr/jsdelivr#github)
+- [Официальный npm registry: metadata и tarball](https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md)
+- [npm dist-tags для stable/canary](https://docs.npmjs.com/adding-dist-tags-to-packages/)
 - Версии выше получены из npm registry `/<package>/latest` 2026-09-07;
   peerDependencies и engines прочитаны до предложения стека.
