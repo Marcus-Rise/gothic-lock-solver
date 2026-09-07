@@ -1,8 +1,8 @@
 import { LockModel, PreparedSearch } from './lock.ts';
-import { MatrixSearch, SearchBudget } from './astar.ts';
-import { createSolverConfig, validateSolverConfig } from './config.ts';
+import { MatrixSearch } from './astar.ts';
+import { SearchBudget, createSolverConfig, validateSolverConfig } from './config.ts';
 import type { SolverConfig } from './config.ts';
-import type { Command, Links, Position, State } from './types.ts';
+import type { Command, Links, Position, StateConstraint } from './types.ts';
 
 /**
  * Find a legal sequence with the minimum number of actions, or null when the
@@ -16,14 +16,15 @@ import type { Command, Links, Position, State } from './types.ts';
  * @throws {SearchLimitError} When a computation limit is exceeded (not unsolvable).
  */
 export function solveLock<const S extends readonly Position[]>(
-  state: S & (number extends S['length'] ? unknown : S extends State ? unknown : never),
+  state: S & StateConstraint<S>,
   links: NoInfer<Links<S>>,
   config?: SolverConfig,
 ): readonly Command[] | null {
   const options = config === undefined ? createSolverConfig() : validateSolverConfig(config);
   const model = new LockModel(state, links);
   const prepared = new PreparedSearch(model);
-  return new MatrixSearch(model, prepared, new SearchBudget(options)).solve();
+  const budget = new SearchBudget(options);
+  return new MatrixSearch(model, prepared, budget).solve();
 }
 
 export { createSolverConfig } from './config.ts';

@@ -3,7 +3,7 @@ import { solveLock } from '../../src/index.ts';
 import type { Link, Position } from '../../src/index.ts';
 import { LockModel } from '../../src/lock.ts';
 import { PreparedSearch } from '../../src/lock.ts';
-import { SearchBudget } from '../../src/astar.ts';
+import { SearchBudget } from '../../src/config.ts';
 import { createSolverConfig } from '../../src/index.ts';
 import { BfsSearch } from '../../src/bfs.ts';
 import { referenceActions, replay } from './oracle.ts';

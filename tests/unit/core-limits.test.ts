@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { SearchLimitError } from '../../src/index.ts';
 import { LockModel } from '../../src/lock.ts';
 import { PreparedSearch, movementLimits } from '../../src/lock.ts';
-import { SearchBudget } from '../../src/astar.ts';
+import { SearchBudget } from '../../src/config.ts';
 import { createSolverConfig } from '../../src/index.ts';
 import { BfsSearch } from '../../src/bfs.ts';
 import { MatrixSearch } from '../../src/astar.ts';

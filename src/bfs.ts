@@ -1,110 +1,183 @@
 import { SearchLimitError } from './errors.ts';
-import { commandFor, decodeDigits, movementLimits, readAt, readByte, readInt32 } from './lock.ts';
+import {
+  DIRECTIONS,
+  MAX_SHIFT,
+  commandFor,
+  decodeDigits,
+  movementLimits,
+  readAt,
+  readByte,
+  readInt32,
+} from './lock.ts';
 import type { PreparedSearch } from './lock.ts';
-import type { SearchBudget } from './astar.ts';
+import type { SearchBudget } from './config.ts';
 import type { Command } from './types.ts';
 
-interface SparseRecord {
+const UNVISITED = -2;
+const ROOT_PARENT = -1;
+const MAX_INT32 = 0x7fffffff;
+const DIRECTION_COUNT = DIRECTIONS.length;
+
+interface Predecessor {
   readonly parent: number;
   readonly action: number;
 }
 
 type Records =
   | { readonly dense: true; readonly parents: Int32Array; readonly actions: Uint8Array }
-  | { readonly dense: false; readonly parents: Map<number, SparseRecord> };
+  | { readonly dense: false; readonly parents: Map<number, Predecessor> };
 
-function unpack(packed: number): Command {
-  const plateDirection = Math.floor(packed / 6);
-  const sign = plateDirection % 2 === 0 ? 1 : -1;
-  return commandFor(Math.floor(plateDirection / 2), sign * (packed % 6 + 1));
+function encodeCommand(plate: number, direction: number, steps: number): number {
+  const directionIndex = direction > 0 ? 0 : 1;
+  return (plate * DIRECTION_COUNT + directionIndex) * MAX_SHIFT + steps - 1;
 }
 
-function reconstruct(records: Records, source: number, code: number): readonly Command[] {
+function decodeCommand(packed: number): Command {
+  const plateAndDirection = Math.floor(packed / MAX_SHIFT);
+  const plate = Math.floor(plateAndDirection / DIRECTION_COUNT);
+  const direction = readAt(DIRECTIONS, plateAndDirection % DIRECTION_COUNT);
+  const steps = packed % MAX_SHIFT + 1;
+  return commandFor(plate, direction * steps);
+}
+
+function hasVisited(records: Records, state: number): boolean {
+  return records.dense
+    ? readInt32(records.parents, state) !== UNVISITED
+    : records.parents.has(state);
+}
+
+function remember(records: Records, state: number, parent: number, action: number): void {
+  if (records.dense) {
+    records.parents[state] = parent;
+    records.actions[state] = action;
+  } else {
+    records.parents.set(state, { parent, action });
+  }
+}
+
+function readPredecessor(records: Records, state: number): Predecessor {
+  if (records.dense) {
+    return {
+      parent: readInt32(records.parents, state),
+      action: readByte(records.actions, state),
+    };
+  }
+  const predecessor = records.parents.get(state);
+  if (predecessor === undefined) {
+    throw new Error('Internal BFS predecessor invariant failed.');
+  }
+  return predecessor;
+}
+
+function reconstruct(records: Records, initialCode: number, state: number): readonly Command[] {
   const commands: Command[] = [];
-  while (code !== source) {
-    if (records.dense) {
-      commands.push(unpack(readByte(records.actions, code)));
-      code = readInt32(records.parents, code);
-    } else {
-      const node = records.parents.get(code);
-      if (node === undefined) throw new Error('Internal BFS predecessor invariant failed.');
-      commands.push(unpack(node.action));
-      code = node.parent;
-    }
+  while (state !== initialCode) {
+    const predecessor = readPredecessor(records, state);
+    commands.push(decodeCommand(predecessor.action));
+    state = predecessor.parent;
   }
   return commands.reverse();
 }
 
-/** Exact action BFS; source index, positive sign, then larger steps win ties. */
+/** Exact grouped-action BFS; plate order, positive direction, then larger shifts. */
 export class BfsSearch {
   private readonly prepared: PreparedSearch;
   private readonly budget: SearchBudget;
+  private readonly positionDigits: Uint8Array;
+  private records: Records = { dense: false, parents: new Map() };
+  private queue: Int32Array | number[] = [];
+  private queueCapacity = 1;
+  private readIndex = 0;
+  private writeIndex = 0;
+  private queuedStates = 0;
 
   constructor(prepared: PreparedSearch, budget: SearchBudget) {
     this.prepared = prepared;
     this.budget = budget;
+    this.positionDigits = new Uint8Array(prepared.plateCount);
   }
 
   solve(): readonly Command[] | null {
-    const { n, size, source, goal, effects } = this.prepared;
-    const budget = this.budget;
-    budget.visit();
-    if (source === goal) return [];
-
-    // Signed parents need two sentinel values. Queue holds only the live frontier.
-    const capacity = Math.min(size, budget.options.maxVisited, budget.options.maxFrontier);
-    const denseBytes = size * 5 + capacity * 4;
-    const dense = size <= 0x7fffffff && denseBytes <= budget.options.maxDenseBytes;
-    let records: Records;
-    let queue: Int32Array | number[];
-    try {
-      records = dense
-        ? { dense: true, parents: new Int32Array(size).fill(-2), actions: new Uint8Array(size) }
-        : { dense: false, parents: new Map<number, SparseRecord>() };
-      queue = dense ? new Int32Array(capacity) : [];
-    } catch (error) {
-      if (!(error instanceof RangeError)) throw error;
-      throw new SearchLimitError('maxDenseBytes', budget.options.maxDenseBytes, denseBytes, { cause: error });
+    this.budget.visit();
+    if (this.prepared.initialCode === this.prepared.goalCode) {
+      return [];
     }
-    if (records.dense) records.parents[source] = -1;
-    else records.parents.set(source, { parent: -1, action: -1 });
-    queue[0] = source;
-    let head = 0;
-    let tail = 1 % capacity;
-    let frontier = 1;
-    const digits = new Uint8Array(n);
+    this.initializeStorage();
+    remember(this.records, this.prepared.initialCode, ROOT_PARENT, 0);
+    this.enqueue(this.prepared.initialCode);
 
-    while (frontier > 0) {
-      budget.expand();
-      const code = queue instanceof Int32Array ? readInt32(queue, head) : readAt(queue, head);
-      head = (head + 1) % capacity;
-      frontier -= 1;
-      decodeDigits(code, digits);
-      for (let plate = 0; plate < n; plate += 1) {
-        const effect = effects[plate];
-        if (effect === undefined) throw new Error('Internal search dimension invariant failed.');
-        const limits = movementLimits(digits, effect);
-        for (let direction = 0; direction < 2; direction += 1) {
-          const sign = direction === 0 ? 1 : -1;
-          const limit = direction === 0 ? limits[0] : limits[1];
-          for (let steps = limit; steps >= 1; steps -= 1) {
-            const next = code + sign * steps * effect.offset;
-            if (records.dense ? readInt32(records.parents, next) !== -2 : records.parents.has(next)) continue;
-            budget.visit();
-            const action = (plate * 2 + direction) * 6 + steps - 1;
-            if (records.dense) {
-              records.parents[next] = code;
-              records.actions[next] = action;
-            } else records.parents.set(next, { parent: code, action });
-            if (next === goal) return reconstruct(records, source, next);
-            budget.check('maxFrontier', frontier + 1);
-            queue[tail] = next;
-            tail = (tail + 1) % capacity;
-            frontier += 1;
-          }
+    while (this.queuedStates > 0) {
+      this.budget.expand();
+      const state = this.dequeue();
+      decodeDigits(state, this.positionDigits);
+      for (let plate = 0; plate < this.prepared.plateCount; plate += 1) {
+        if (this.expandPlate(state, plate)) {
+          return reconstruct(this.records, this.prepared.initialCode, this.prepared.goalCode);
         }
       }
     }
     return null;
+  }
+
+  private initializeStorage(): void {
+    const { stateCount } = this.prepared;
+    const { maxVisited, maxFrontier, maxDenseBytes } = this.budget.options;
+    this.queueCapacity = Math.min(stateCount, maxVisited, maxFrontier);
+    const bytesPerRecord = Int32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT;
+    const denseBytes = stateCount * bytesPerRecord + this.queueCapacity * Int32Array.BYTES_PER_ELEMENT;
+    // Dense parents are signed state codes; negative values are sentinels.
+    const useDenseStorage = stateCount <= MAX_INT32 && denseBytes <= maxDenseBytes;
+    try {
+      this.records = useDenseStorage
+        ? { dense: true, parents: new Int32Array(stateCount).fill(UNVISITED), actions: new Uint8Array(stateCount) }
+        : { dense: false, parents: new Map() };
+      this.queue = useDenseStorage ? new Int32Array(this.queueCapacity) : [];
+    } catch (error) {
+      if (!(error instanceof RangeError)) {
+        throw error;
+      }
+      throw new SearchLimitError('maxDenseBytes', maxDenseBytes, denseBytes, { cause: error });
+    }
+    this.readIndex = 0;
+    this.writeIndex = 0;
+    this.queuedStates = 0;
+  }
+
+  /** Ring-buffer storage retains only the live frontier, including sparse mode. */
+  private enqueue(state: number): void {
+    this.budget.check('maxFrontier', this.queuedStates + 1);
+    this.queue[this.writeIndex] = state;
+    this.writeIndex = (this.writeIndex + 1) % this.queueCapacity;
+    this.queuedStates += 1;
+  }
+
+  private dequeue(): number {
+    const state = this.queue instanceof Int32Array
+      ? readInt32(this.queue, this.readIndex)
+      : readAt(this.queue, this.readIndex);
+    this.readIndex = (this.readIndex + 1) % this.queueCapacity;
+    this.queuedStates -= 1;
+    return state;
+  }
+
+  private expandPlate(state: number, plate: number): boolean {
+    const effect = readAt(this.prepared.effects, plate);
+    const [positiveLimit, negativeLimit] = movementLimits(this.positionDigits, effect);
+    for (const direction of DIRECTIONS) {
+      const limit = direction > 0 ? positiveLimit : negativeLimit;
+      for (let steps = limit; steps >= 1; steps -= 1) {
+        const nextState = state + direction * steps * effect.stateCodeOffset;
+        if (hasVisited(this.records, nextState)) {
+          continue;
+        }
+        this.budget.visit();
+        remember(this.records, nextState, state, encodeCommand(plate, direction, steps));
+        if (nextState === this.prepared.goalCode) {
+          return true;
+        }
+        this.enqueue(nextState);
+      }
+    }
+    return false;
   }
 }

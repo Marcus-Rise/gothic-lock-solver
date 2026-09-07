@@ -29,6 +29,14 @@ Use domain terms and clear invariant ownership. Prefer composition, small statef
 classes and plain functions over registries, extra layers or helper-file scaffolding.
 Apply SOLID, DRY, KISS and YAGNI proportionately.
 
+Use descriptive domain names and one operation per statement. Give domain bounds,
+byte sizes and sentinel values names; ordinary loop indices need no constant.
+Keep the top-level search/release flow readable in order. Necessary matrix loops
+remain explicit, with short bodies; do not hide them in allocation-heavy pipelines.
+Oxlint limits block nesting to three levels in `src/` and `.github/scripts/`.
+Review responsibilities and data flow as well as tests; passing gates alone does
+not establish maintainability.
+
 Use pnpm and exact current stable dependencies with a frozen lockfile. Preserve
 strict TypeScript, checked indexed access, exact optional properties and
 `skipLibCheck: false`. No `any`, non-null assertions, `ts-ignore` or unchecked casts.

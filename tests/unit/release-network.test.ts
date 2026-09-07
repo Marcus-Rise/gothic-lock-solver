@@ -73,7 +73,7 @@ describe('npm and CDN delivery boundaries', () => {
   });
 });
 
-function mockGithub(directory: string, options: { draft: boolean; missing?: string; tagSha?: string; newer?: boolean; onSecondPage?: boolean }): void {
+function mockGithub(directory: string, options: { draft: boolean; missing?: string; tagSha?: string; newer?: boolean; onSecondPage?: boolean; corruptAsset?: string }): void {
   const tag = `v${manifest.version}`;
   const filenames = [...releaseAssets, 'release-manifest.json'];
   const release = { tag_name: tag, draft: options.draft, prerelease: false, assets: filenames.filter(name => name !== options.missing).map(name => ({ name })) };
@@ -82,7 +82,7 @@ function mockGithub(directory: string, options: { draft: boolean; missing?: stri
     if (args[0] === 'api') {
       const endpoint = args[1] ?? '';
       if (endpoint.includes('matching-refs')) return JSON.stringify([{ ref: `refs/tags/${tag}` }]);
-      if (endpoint.includes('/git/ref/tags/')) return JSON.stringify({ object: { type: 'commit', sha: options.tagSha ?? manifest.sourceSha } });
+      if (endpoint.includes('/commits/refs/tags/')) return JSON.stringify({ sha: options.tagSha ?? manifest.sourceSha });
       if (endpoint.includes('releases?')) {
         const firstPage = options.onSecondPage ? Array.from({ length: 100 }, (_, index) => ({ tag_name: `v2.0.0-canary.${index}`, draft: false, prerelease: true })) : [release];
         const pages = [firstPage, ...(options.onSecondPage ? [[release]] : []), ...(options.newer ? [[{ tag_name: 'v1.1.0', draft: false, prerelease: false }]] : [])];
@@ -91,9 +91,15 @@ function mockGithub(directory: string, options: { draft: boolean; missing?: stri
       if (endpoint.includes('/releases/tags/')) return JSON.stringify(release);
     }
     if (args[0] === 'release' && args[1] === 'download') {
-      const filename = args[args.indexOf('--pattern') + 1]; const destination = args[args.indexOf('--dir') + 1];
-      if (!filename || !destination) throw new Error('Missing download arguments');
-      writeFileSync(join(destination, filename), readFileSync(join(directory, filename)));
+      const destination = args[args.indexOf('--dir') + 1];
+      if (!destination) throw new Error('Missing download directory');
+      for (const [index, argument] of args.entries()) {
+        if (argument !== '--pattern') continue;
+        const filename = args[index + 1];
+        if (!filename) throw new Error('Missing asset pattern');
+        const bytes = options.corruptAsset === filename ? Buffer.from('changed asset') : readFileSync(join(directory, filename));
+        writeFileSync(join(destination, filename), bytes);
+      }
       return '';
     }
     if (args[0] === 'release' && ['upload', 'edit'].includes(args[1] ?? '')) return '';
@@ -103,6 +109,17 @@ function mockGithub(directory: string, options: { draft: boolean; missing?: stri
 }
 
 describe('GitHub partial-release recovery', () => {
+  it('rejects changed downloaded assets before publishing the draft', async () => {
+    const directory = await releaseDirectory();
+    try {
+      mockGithub(directory, { draft: true, corruptAsset: 'benchmark-evidence.json' });
+      await expect(completeGithubRelease(directory, manifest, 'owner/repo')).rejects.toThrow(/identity/);
+      expect(command.mock.calls.some(([, args]) => args[1] === 'edit')).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects an existing tag at a different commit before uploading or finalizing', async () => {
     const directory = await releaseDirectory();
     try {

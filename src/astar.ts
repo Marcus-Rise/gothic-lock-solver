@@ -1,67 +1,73 @@
 import { SearchLimitError } from './errors.ts';
-import { commandFor, decodeDigits, movementLimits, readAt, readByte } from './lock.ts';
-import { IndexedHeap } from './priority-queue.ts';
+import {
+  DIRECTIONS,
+  MAX_SHIFT,
+  commandFor,
+  decodeDigits,
+  minimumActionsForShift,
+  movementLimits,
+  readAt,
+  readByte,
+} from './lock.ts';
+import type { Effect, LockModel, PreparedSearch } from './lock.ts';
+import { IndexedHeap, NOT_QUEUED } from './priority-queue.ts';
 import type { SearchNode } from './priority-queue.ts';
-import type { LockModel, PreparedSearch } from './lock.ts';
 import { analyzeMatrix } from './matrix.ts';
 import { BfsSearch } from './bfs.ts';
-import { createSolverConfig } from './config.ts';
-import type { SolverConfig } from './config.ts';
+import type { SearchBudget } from './config.ts';
 import type { Command } from './types.ts';
 
-/** One counter owner shared by the certificate, A* and singular BFS. */
-export class SearchBudget {
-  readonly options: SolverConfig;
-  private visited = 0;
-  private expanded = 0;
-
-  constructor(options: SolverConfig = createSolverConfig()) {
-    this.options = options;
+function findExecutablePlate(
+  prepared: PreparedSearch,
+  remainingShifts: readonly number[],
+  positionDigits: Uint8Array,
+): number | null {
+  for (let plate = 0; plate < prepared.plateCount; plate += 1) {
+    const shift = readAt(remainingShifts, plate);
+    if (shift === 0) {
+      continue;
+    }
+    const effect = readAt(prepared.effects, plate);
+    const [positiveLimit, negativeLimit] = movementLimits(positionDigits, effect);
+    const allowedShift = shift > 0 ? positiveLimit : negativeLimit;
+    if (Math.abs(shift) <= allowedShift) {
+      return plate;
+    }
   }
-
-  check(name: keyof SolverConfig, used: number): void {
-    if (used > this.options[name]) throw new SearchLimitError(name, this.options[name], used);
-  }
-
-  visit(): void {
-    this.check('maxVisited', this.visited + 1);
-    this.visited += 1;
-  }
-
-  expand(): void {
-    this.check('maxExpanded', this.expanded + 1);
-    this.expanded += 1;
-  }
+  return null;
 }
 
 /**
- * Sufficient certificate only: legal single actions for nonzero net entries
- * attain the global lower bound. Failure is discarded and full A* still runs.
+ * A sufficient certificate: one legal action per nonzero net shift attains the
+ * lower bound. Failure proves nothing; A* then starts from the initial state.
  */
-function greedyCertificate(prepared: PreparedSearch, net: readonly number[], budget: SearchBudget): readonly Command[] | null {
-  if (net.some((value) => Math.abs(value) > 6)) return null;
-  const remaining = [...net];
-  const digits = new Uint8Array(prepared.n);
-  decodeDigits(prepared.source, digits);
+function greedyCertificate(
+  prepared: PreparedSearch,
+  requiredShifts: readonly number[],
+  budget: SearchBudget,
+): readonly Command[] | null {
+  if (requiredShifts.some((shift) => Math.abs(shift) > MAX_SHIFT)) {
+    return null;
+  }
+
+  const remainingShifts = [...requiredShifts];
+  const positionDigits = new Uint8Array(prepared.plateCount);
+  decodeDigits(prepared.initialCode, positionDigits);
   const commands: Command[] = [];
-  let pending = remaining.filter(Boolean).length;
-  while (pending > 0) {
-    let selected = -1;
-    for (let plate = 0; plate < prepared.n; plate += 1) {
-      const delta = readAt(remaining, plate);
-      if (delta === 0) continue;
-      const limits = movementLimits(digits, readAt(prepared.effects, plate));
-      if (Math.abs(delta) <= limits[delta > 0 ? 0 : 1]) { selected = plate; break; }
+  let pendingActions = remainingShifts.filter((shift) => shift !== 0).length;
+  while (pendingActions > 0) {
+    const plate = findExecutablePlate(prepared, remainingShifts, positionDigits);
+    if (plate === null) {
+      return null;
     }
-    if (selected === -1) return null;
-    const delta = readAt(remaining, selected);
-    const effect = readAt(prepared.effects, selected);
+    const shift = readAt(remainingShifts, plate);
+    const effect = readAt(prepared.effects, plate);
     for (const { target, sign } of effect.shifts) {
-      digits[target] = readByte(digits, target) + delta * sign;
+      positionDigits[target] = readByte(positionDigits, target) + shift * sign;
     }
-    commands.push(commandFor(selected, delta));
-    remaining[selected] = 0;
-    pending -= 1;
+    commands.push(commandFor(plate, shift));
+    remainingShifts[plate] = 0;
+    pendingActions -= 1;
   }
   budget.check('maxVisited', commands.length + 1);
   budget.check('maxExpanded', commands.length);
@@ -78,9 +84,8 @@ function reconstruct(node: SearchNode): readonly Command[] {
 }
 
 /**
- * Invertible A gives a unique remaining net r for each physical state. An action
- * changes one r[i] by at most six, so h = sum ceil(abs(r[i])/6) is consistent.
- * Closed nodes are final and the first popped goal minimizes action count.
+ * An invertible matrix gives unique remaining shifts for each physical state.
+ * Their action lower bound is consistent, so the first popped goal is optimal.
  */
 export class MatrixSearch {
   private readonly model: LockModel;
@@ -94,72 +99,134 @@ export class MatrixSearch {
   }
 
   solve(): readonly Command[] | null {
-    const { n, source, goal, effects } = this.prepared;
-    const budget = this.budget;
-    if (source === goal) { budget.visit(); return []; }
+    if (this.prepared.initialCode === this.prepared.goalCode) {
+      this.budget.visit();
+      return [];
+    }
     const analysis = analyzeMatrix(this.model);
-    if (analysis.kind === 'inconsistent' || analysis.kind === 'noninteger') return null;
-    if (analysis.kind === 'singular') return new BfsSearch(this.prepared, budget).solve();
-    const certificate = greedyCertificate(this.prepared, analysis.net, budget);
-    if (certificate !== null) return certificate;
+    if (analysis.kind === 'inconsistent' || analysis.kind === 'noninteger') {
+      return null;
+    }
+    if (analysis.kind === 'singular') {
+      return new BfsSearch(this.prepared, this.budget).solve();
+    }
+    const certificate = greedyCertificate(this.prepared, analysis.net, this.budget);
+    if (certificate !== null) {
+      return certificate;
+    }
+    return new AStarSearch(this.prepared, this.budget).solve(analysis.net, analysis.lowerBound);
+  }
+}
 
-    budget.visit();
+/** Mutable A* state is allocated only after the certificate cannot finish. */
+class AStarSearch {
+  private readonly prepared: PreparedSearch;
+  private readonly budget: SearchBudget;
+  private readonly positionDigits: Uint8Array;
+  private readonly frontier = new IndexedHeap();
+  private readonly records = new Map<number, SearchNode>();
+  private nextSequence = 1;
+
+  constructor(prepared: PreparedSearch, budget: SearchBudget) {
+    this.prepared = prepared;
+    this.budget = budget;
+    this.positionDigits = new Uint8Array(prepared.plateCount);
+  }
+
+  solve(requiredShifts: readonly number[], lowerBound: number): readonly Command[] | null {
+    this.budget.visit();
     const root: SearchNode = {
-      key: source, g: 0, h: analysis.lowerBound, r: analysis.net,
-      previous: null, plate: -1, delta: 0, sequence: 0, heapIndex: -1, closed: false,
+      state: this.prepared.initialCode,
+      actionCount: 0,
+      estimate: lowerBound,
+      remainingShifts: requiredShifts,
+      previous: null,
+      // The root has no incoming command; reconstruction stops at previous=null.
+      plate: -1,
+      delta: 0,
+      sequence: 0,
+      heapIndex: NOT_QUEUED,
+      closed: false,
     };
-    const heap = new IndexedHeap();
-    heap.push(root);
-    const records = new Map<number, SearchNode>([[source, root]]);
-    const digits = new Uint8Array(n);
-    let sequence = 1;
-    while (heap.size > 0) {
-      const node = heap.pop();
-      if (node.key === goal) return reconstruct(node);
-      budget.expand();
+    this.frontier.push(root);
+    this.records.set(root.state, root);
+
+    while (this.frontier.size > 0) {
+      const node = this.frontier.pop();
+      if (node.state === this.prepared.goalCode) {
+        return reconstruct(node);
+      }
+      this.budget.expand();
       node.closed = true;
-      decodeDigits(node.key, digits);
-      for (let plate = 0; plate < n; plate += 1) {
-        const effect = effects[plate];
-        const previousNet = node.r[plate];
-        if (effect === undefined || previousNet === undefined) throw new Error('Internal search dimension invariant failed.');
-        const limits = movementLimits(digits, effect);
-        const preferred = previousNet < 0 ? -1 : 1;
-        for (let side = 0; side < 2; side += 1) {
-          const sign = side === 0 ? preferred : -preferred;
-          const limit = limits[sign > 0 ? 0 : 1];
-          for (let steps = limit; steps >= 1; steps -= 1) {
-            const delta = sign * steps;
-            const key = node.key + delta * effect.offset;
-            const g = node.g + 1;
-            const existing = records.get(key);
-            if (existing !== undefined && (existing.closed || existing.g <= g)) continue;
-            if (existing !== undefined) {
-              // The physical state uniquely determines r/h; finalized parent
-              // and a lower g are the only changes required by decrease-key.
-              existing.g = g;
-              existing.previous = node;
-              existing.plate = plate;
-              existing.delta = delta;
-              heap.up(existing);
-              continue;
-            }
-            budget.visit();
-            budget.check('maxFrontier', heap.size + 1);
-            const r = [...node.r];
-            const remaining = previousNet - delta;
-            r[plate] = remaining;
-            const h = node.h - Math.ceil(Math.abs(previousNet) / 6) + Math.ceil(Math.abs(remaining) / 6);
-            if (!Number.isSafeInteger(remaining) || !Number.isSafeInteger(g + h)) {
-              throw new SearchLimitError('matrixArithmetic', Number.MAX_SAFE_INTEGER, String(remaining));
-            }
-            const next: SearchNode = { key, g, h, r, previous: node, plate, delta, sequence: sequence++, heapIndex: -1, closed: false };
-            records.set(key, next);
-            heap.push(next);
-          }
-        }
+      decodeDigits(node.state, this.positionDigits);
+      for (let plate = 0; plate < this.prepared.plateCount; plate += 1) {
+        this.expandPlate(node, plate);
       }
     }
     return null;
+  }
+
+  private expandPlate(node: SearchNode, plate: number): void {
+    const effect = readAt(this.prepared.effects, plate);
+    const remainingShift = readAt(node.remainingShifts, plate);
+    const preferredDirection = remainingShift < 0 ? -1 : 1;
+    const [positiveLimit, negativeLimit] = movementLimits(this.positionDigits, effect);
+
+    // Preserve plate order, preferred direction, then larger displacement first.
+    for (const preference of DIRECTIONS) {
+      const direction = preferredDirection * preference;
+      const limit = direction > 0 ? positiveLimit : negativeLimit;
+      for (let steps = limit; steps >= 1; steps -= 1) {
+        this.visitNeighbor(node, plate, direction * steps, effect);
+      }
+    }
+  }
+
+  private visitNeighbor(parent: SearchNode, plate: number, delta: number, effect: Effect): void {
+    const state = parent.state + delta * effect.stateCodeOffset;
+    const actionCount = parent.actionCount + 1;
+    const existing = this.records.get(state);
+    if (existing !== undefined) {
+      if (existing.closed || existing.actionCount <= actionCount) {
+        return;
+      }
+      // The physical state fixes remaining shifts and their lower bound.
+      // A shorter path only changes the predecessor and queue priority.
+      existing.actionCount = actionCount;
+      existing.previous = parent;
+      existing.plate = plate;
+      existing.delta = delta;
+      this.frontier.decreasePriority(existing);
+      return;
+    }
+
+    this.budget.visit();
+    this.budget.check('maxFrontier', this.frontier.size + 1);
+    const previousShift = readAt(parent.remainingShifts, plate);
+    const remainingShift = previousShift - delta;
+    const remainingShifts = [...parent.remainingShifts];
+    remainingShifts[plate] = remainingShift;
+    const estimate = parent.estimate
+      - minimumActionsForShift(previousShift)
+      + minimumActionsForShift(remainingShift);
+    if (!Number.isSafeInteger(remainingShift) || !Number.isSafeInteger(actionCount + estimate)) {
+      throw new SearchLimitError('matrixArithmetic', Number.MAX_SAFE_INTEGER, String(remainingShift));
+    }
+
+    const next: SearchNode = {
+      state,
+      actionCount,
+      estimate,
+      remainingShifts,
+      previous: parent,
+      plate,
+      delta,
+      sequence: this.nextSequence,
+      heapIndex: NOT_QUEUED,
+      closed: false,
+    };
+    this.nextSequence += 1;
+    this.records.set(state, next);
+    this.frontier.push(next);
   }
 }

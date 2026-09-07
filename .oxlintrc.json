@@ -25,5 +25,19 @@
     "node_modules/**",
     "artifacts/**",
     "tests/e2e/distribution/fixtures/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/**/*.ts",
+        ".github/scripts/**/*.ts"
+      ],
+      "rules": {
+        "max-depth": [
+          "error",
+          3
+        ]
+      }
+    }
   ]
 }

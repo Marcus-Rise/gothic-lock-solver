@@ -28,6 +28,12 @@ CLI invokes the exported solver/factory. The model, matrix analysis, searches an
 priority queue each own one responsibility. Config/default validation lives in
 `config.ts`. Classes encapsulate useful state; arithmetic uses plain functions.
 
+Use domain names, named mechanical bounds and explicit units for packed state or
+byte arithmetic. Keep one operation per statement and short loop bodies. Matrix
+iteration remains explicit; search and release orchestration should read as ordered
+steps. Oxlint limits block nesting to three levels in source and delivery scripts.
+Review these properties independently of test success.
+
 Tests live in `tests/unit`, `tests/e2e` and `tests/benchmarks`. TS consumer fixtures
 are compiled into ignored output when JavaScript is needed. Vite bundles the
 production files; `.github/scripts` coordinates existing build/release tools.

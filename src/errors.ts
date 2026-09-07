@@ -6,7 +6,13 @@ export class LockInputError extends Error {
   }
 }
 
-export type SearchLimit = 'maxVisited' | 'maxExpanded' | 'maxFrontier' | 'maxDenseBytes' | 'stateEncoding' | 'matrixArithmetic';
+export type SearchLimit =
+  | 'maxVisited'
+  | 'maxExpanded'
+  | 'maxFrontier'
+  | 'maxDenseBytes'
+  | 'stateEncoding'
+  | 'matrixArithmetic';
 
 /** Computation exhausted a resource; this is never proof of unreachability. */
 export class SearchLimitError extends Error {
@@ -14,7 +20,12 @@ export class SearchLimitError extends Error {
   readonly maximum: number;
   readonly used: number | string;
 
-  constructor(limit: SearchLimit, maximum: number, used: number | string, options?: ErrorOptions) {
+  constructor(
+    limit: SearchLimit,
+    maximum: number,
+    used: number | string,
+    options?: ErrorOptions,
+  ) {
     super(`Превышен ресурсный предел поиска: ${limit} (предел ${maximum}, требуется ${used}).`, options);
     this.name = 'SearchLimitError';
     this.limit = limit;

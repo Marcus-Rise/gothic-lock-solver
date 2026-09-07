@@ -1,4 +1,4 @@
-import { LockInputError } from './errors.ts';
+import { LockInputError, SearchLimitError } from './errors.ts';
 
 /** Per-solve resource limits. Byte and expansion limits may be zero. */
 export interface SolverConfig {
@@ -15,18 +15,26 @@ const DEFAULTS: SolverConfig = Object.freeze({
   maxDenseBytes: 64 * 1024 * 1024,
 });
 
+type ConfigMode = 'complete' | 'overrides';
+
 function isConfigField(key: PropertyKey): key is keyof SolverConfig {
-  return key === 'maxVisited' || key === 'maxExpanded' || key === 'maxFrontier' || key === 'maxDenseBytes';
+  return key === 'maxVisited'
+    || key === 'maxExpanded'
+    || key === 'maxFrontier'
+    || key === 'maxDenseBytes';
 }
 
-/** Shared runtime boundary for typed callers, ordinary JavaScript and CLI JSON. */
-export function validateSolverConfig(value: unknown, partial = false): SolverConfig {
+/** Shared factory implementation for typed overrides, complete configs and JSON. */
+export function validateSolverConfig(value: unknown, mode: ConfigMode = 'complete'): SolverConfig {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new LockInputError('Конфигурация поиска должна быть объектом.');
   }
+
   const config = { ...DEFAULTS };
   for (const key of Reflect.ownKeys(value)) {
-    if (!isConfigField(key)) throw new LockInputError(`Неизвестное поле конфигурации: ${String(key)}.`);
+    if (!isConfigField(key)) {
+      throw new LockInputError(`Неизвестное поле конфигурации: ${String(key)}.`);
+    }
     const setting: unknown = Reflect.get(value, key);
     const minimum = key === 'maxVisited' || key === 'maxFrontier' ? 1 : 0;
     if (typeof setting !== 'number' || !Number.isSafeInteger(setting) || setting < minimum) {
@@ -34,15 +42,45 @@ export function validateSolverConfig(value: unknown, partial = false): SolverCon
     }
     config[key] = setting;
   }
-  if (!partial) {
+  if (mode === 'complete') {
     for (const key of Object.keys(DEFAULTS)) {
-      if (!Object.hasOwn(value, key)) throw new LockInputError(`В конфигурации отсутствует поле ${key}.`);
+      if (!Object.hasOwn(value, key)) {
+        throw new LockInputError(`В конфигурации отсутствует поле ${key}.`);
+      }
     }
   }
   return Object.freeze(config);
 }
 
-/** Return a complete immutable configuration without changing the overrides. */
+/** Return complete immutable settings without changing the caller's overrides. */
 export function createSolverConfig(overrides: Partial<SolverConfig> = {}): SolverConfig {
-  return validateSolverConfig(overrides, true);
+  return validateSolverConfig(overrides, 'overrides');
+}
+
+/** Shared consumption counters for the certificate and both search algorithms. */
+export class SearchBudget {
+  readonly options: SolverConfig;
+  private visitedStates = 0;
+  private expandedStates = 0;
+
+  constructor(options: SolverConfig = createSolverConfig()) {
+    this.options = options;
+  }
+
+  check(name: keyof SolverConfig, used: number): void {
+    const maximum = this.options[name];
+    if (used > maximum) {
+      throw new SearchLimitError(name, maximum, used);
+    }
+  }
+
+  visit(): void {
+    this.check('maxVisited', this.visitedStates + 1);
+    this.visitedStates += 1;
+  }
+
+  expand(): void {
+    this.check('maxExpanded', this.expandedStates + 1);
+    this.expandedStates += 1;
+  }
 }

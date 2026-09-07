@@ -25,6 +25,22 @@ All referenced Actions are from their tool/service authors and pinned to verifie
 full commit SHAs. pnpm owns dependency installation, Vite owns bundling, and
 Vitest/Playwright own the checks. Workflow YAML only connects working local steps.
 
+## One workflow, three jobs
+
+`release.yml` runs PR verification, stable publication on main and optional manual
+canaries. Its check name is `CI`. A main push runs the verification sequence once.
+
+| Job | Responsibility | Publication permission |
+| --- | --- | --- |
+| Verification | Local checks, one archive across Node 22/24/26, browser consumers and the paired benchmark | None; repository read only |
+| npm delivery | Prepare the verified files using trusted main tooling, publish or resume the identical archive, verify npm/CDN delivery | npm OIDC |
+| GitHub release | Verify the delivered assets, resume or create the release and finalize it | Repository contents write |
+
+PRs finish after verification. Publication jobs require main workflow context and
+the readiness setting. Candidate code runs in the readonly job; publication tools
+come from a separate trusted main checkout. The same archive moves between jobs
+without rebuilding. Failed delivery retains its evidence for recovery.
+
 ## Local acceptance precedes workflow integration
 
 Run the full local test command, coverage, clean installed package verification
@@ -73,8 +89,8 @@ commit and prepares one immutable candidate:
 2. Verify and retain one tarball containing the five runtime files, declarations,
    package metadata, README and license. No consumer installation script builds it.
 3. Publish that exact tarball to public npm with the agreed SemVer and `latest` tag.
-4. Download the exact published version. Check registry integrity, tarball/file
-   identity, installation and module behavior without consumer credentials.
+4. Download the exact published version without consumer credentials. Verify
+   its tarball is byte-identical to the archive already installed and tested.
 5. Verify all four core file URLs on jsDelivr for status, JavaScript MIME, CORS
    and SHA256. Load them in real Chromium, Firefox and WebKit from another origin
    and solve all 45 fixtures. The fifth file is a Node tool, not a browser script.
