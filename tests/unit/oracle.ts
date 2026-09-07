@@ -31,11 +31,33 @@ export function replay(lock: OracleLock, commands: readonly (readonly [number, n
   return state;
 }
 
-export function referenceActions(lock: OracleLock): number | null {
-  const queue = [{ state: [...lock.state], depth: 0 }];
-  const visited = new Set([lock.state.join(',')]);
-  for (const current of queue) {
-    if (current.state.every((position) => position === 4)) return current.depth;
+export interface OracleCost {
+  readonly actions: number;
+  readonly unitShifts: number;
+}
+
+export function commandCost(commands: readonly (readonly [number, number])[] | null): OracleCost | null {
+  return commands === null ? null : {
+    actions: commands.length,
+    unitShifts: commands.reduce((sum, [, delta]) => sum + Math.abs(delta), 0),
+  };
+}
+
+function compareCost(left: OracleCost, right: OracleCost): number {
+  return left.actions - right.actions || left.unitShifts - right.unitShifts;
+}
+
+/** Deliberately simple Dijkstra: string keys, sorted queue, unit-by-unit edges. */
+export function referenceCost(lock: OracleLock): OracleCost | null {
+  const root = { actions: 0, unitShifts: 0 };
+  const queue = [{ state: [...lock.state], cost: root }];
+  const best = new Map([[lock.state.join(','), root]]);
+  while (queue.length > 0) {
+    queue.sort((left, right) => compareCost(left.cost, right.cost));
+    const current = queue.shift();
+    if (current === undefined) throw new Error('Missing oracle frontier state');
+    if (best.get(current.state.join(',')) !== current.cost) continue;
+    if (current.state.every((position) => position === 4)) return current.cost;
     for (let source = 0; source < current.state.length; source += 1) {
       for (const direction of [1, -1]) {
         let next = current.state;
@@ -44,12 +66,18 @@ export function referenceActions(lock: OracleLock): number | null {
           if (moved === null) break;
           next = moved;
           const key = next.join(',');
-          if (visited.has(key)) continue;
-          visited.add(key);
-          queue.push({ state: next, depth: current.depth + 1 });
+          const cost = { actions: current.cost.actions + 1, unitShifts: current.cost.unitShifts + steps };
+          const previous = best.get(key);
+          if (previous !== undefined && compareCost(previous, cost) <= 0) continue;
+          best.set(key, cost);
+          queue.push({ state: next, cost });
         }
       }
     }
   }
   return null;
+}
+
+export function referenceActions(lock: OracleLock): number | null {
+  return referenceCost(lock)?.actions ?? null;
 }

@@ -39,7 +39,7 @@ function findExecutablePlate(
 
 /**
  * A sufficient certificate: one legal action per nonzero net shift attains the
- * lower bound. Failure proves nothing; A* then starts from the initial state.
+ * action and unit-shift lower bounds. Failure proves nothing; A* starts anew.
  */
 function greedyCertificate(
   prepared: PreparedSearch,
@@ -85,7 +85,8 @@ function reconstruct(node: SearchNode): readonly Command[] {
 
 /**
  * An invertible matrix gives unique remaining shifts for each physical state.
- * Their action lower bound is consistent, so the first popped goal is optimal.
+ * Both cost lower bounds are consistent, so the first popped goal minimizes
+ * actions first, then unit shifts among all minimum-action paths.
  */
 export class MatrixSearch {
   private readonly model: LockModel;
@@ -135,10 +136,16 @@ class AStarSearch {
 
   solve(requiredShifts: readonly number[], lowerBound: number): readonly Command[] | null {
     this.budget.visit();
+    const shiftEstimate = requiredShifts.reduce((sum, shift) => sum + Math.abs(shift), 0);
+    if (!Number.isSafeInteger(shiftEstimate)) {
+      throw new SearchLimitError('matrixArithmetic', Number.MAX_SAFE_INTEGER, shiftEstimate);
+    }
     const root: SearchNode = {
       state: this.prepared.initialCode,
       actionCount: 0,
       estimate: lowerBound,
+      unitShifts: 0,
+      shiftEstimate,
       remainingShifts: requiredShifts,
       previous: null,
       // The root has no incoming command; reconstruction stops at previous=null.
@@ -185,14 +192,21 @@ class AStarSearch {
   private visitNeighbor(parent: SearchNode, plate: number, delta: number, effect: Effect): void {
     const state = parent.state + delta * effect.stateCodeOffset;
     const actionCount = parent.actionCount + 1;
+    const unitShifts = parent.unitShifts + Math.abs(delta);
     const existing = this.records.get(state);
     if (existing !== undefined) {
-      if (existing.closed || existing.actionCount <= actionCount) {
+      const noImprovement = existing.actionCount < actionCount
+        || (existing.actionCount === actionCount && existing.unitShifts <= unitShifts);
+      if (existing.closed || noImprovement) {
         return;
       }
+      if (!Number.isSafeInteger(unitShifts + existing.shiftEstimate)) {
+        throw new SearchLimitError('matrixArithmetic', Number.MAX_SAFE_INTEGER, unitShifts);
+      }
       // The physical state fixes remaining shifts and their lower bound.
-      // A shorter path only changes the predecessor and queue priority.
+      // A better cost only changes the predecessor and queue priority.
       existing.actionCount = actionCount;
+      existing.unitShifts = unitShifts;
       existing.previous = parent;
       existing.plate = plate;
       existing.delta = delta;
@@ -209,7 +223,9 @@ class AStarSearch {
     const estimate = parent.estimate
       - minimumActionsForShift(previousShift)
       + minimumActionsForShift(remainingShift);
-    if (!Number.isSafeInteger(remainingShift) || !Number.isSafeInteger(actionCount + estimate)) {
+    const shiftEstimate = parent.shiftEstimate - Math.abs(previousShift) + Math.abs(remainingShift);
+    if (!Number.isSafeInteger(remainingShift) || !Number.isSafeInteger(actionCount + estimate)
+      || !Number.isSafeInteger(unitShifts + shiftEstimate)) {
       throw new SearchLimitError('matrixArithmetic', Number.MAX_SAFE_INTEGER, String(remainingShift));
     }
 
@@ -217,6 +233,8 @@ class AStarSearch {
       state,
       actionCount,
       estimate,
+      unitShifts,
+      shiftEstimate,
       remainingShifts,
       previous: parent,
       plate,

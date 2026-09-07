@@ -23,10 +23,10 @@ it('reports exhaustion separately on BFS, A*, singular fallback and greedy certi
     expect(() => new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxFrontier: 1 }))).solve()).toThrow(SearchLimitError);
   }
 });
-it('dense and sparse BFS preserve exact action order, including wider safe codes', () => {
+it('dense and sparse BFS agree on minimum-cost commands, including wider safe codes', () => {
   const model = new LockModel([2, 7, 1], [[0, 0, 0], [-1, 0, -1], [-1, -1, 0]]);
   const prepared = new PreparedSearch(model);
-  const expected = [[0, 5], [2, 3]];
+  const expected = [[0, -1], [1, -3]];
   expect(new BfsSearch(prepared, new SearchBudget()).solve()).toEqual(expected);
   expect(new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxDenseBytes: 0 }))).solve()).toEqual(expected);
   const state = [1, ...Array.from({ length: 17 }, () => 4)];

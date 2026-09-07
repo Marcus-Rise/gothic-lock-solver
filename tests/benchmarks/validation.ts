@@ -29,16 +29,6 @@ export function tupleCommands(value: unknown): TupleCommand[] {
     return [index, delta];
   });
 }
-export function legacyCommands(value: unknown): TupleCommand[] {
-  return array(value, 'legacy commands').map((command) => {
-    const item = record(command, 'legacy command');
-    const plate = integer(item['plate'], 'legacy command plate');
-    const steps = integer(item['steps'], 'legacy command steps');
-    const direction = item['direction'];
-    if (plate < 1 || steps < 1 || steps > 6 || (direction !== 'left' && direction !== 'right')) throw new Error('Invalid legacy command.');
-    return [plate - 1, direction === 'left' ? steps : -steps];
-  });
-}
 export function replayCommands(definition: Definition, value: unknown): number[] {
   let state = [...definition.state];
   for (const [index, delta] of tupleCommands(value)) {

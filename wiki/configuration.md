@@ -31,7 +31,7 @@ only dense storage, not total heap or process RSS; sparse structures and runtime
 costs remain relevant. Exceeding a search budget throws `SearchLimitError` with
 `limit` and `maximum`, never `null` for interrupted work. An open state or algebraic
 impossibility can be decided without expansion. Every returned path still has the
-minimum action count. Positions 1–7, goal 4 and direct links are fixed domain rules.
+minimum action count and, among equal-action paths, minimum unit shifts. Positions 1–7, goal 4 and direct links are fixed domain rules.
 
 ## CLI
 

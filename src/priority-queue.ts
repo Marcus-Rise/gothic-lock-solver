@@ -4,6 +4,8 @@ export interface SearchNode {
   readonly state: number;
   actionCount: number;
   readonly estimate: number;
+  unitShifts: number;
+  readonly shiftEstimate: number;
   readonly remainingShifts: readonly number[];
   previous: SearchNode | null;
   plate: number;
@@ -26,6 +28,11 @@ export class IndexedHeap {
     const rightTotal = right.actionCount + right.estimate;
     if (leftTotal !== rightTotal) {
       return leftTotal < rightTotal;
+    }
+    const leftShifts = left.unitShifts + left.shiftEstimate;
+    const rightShifts = right.unitShifts + right.shiftEstimate;
+    if (leftShifts !== rightShifts) {
+      return leftShifts < rightShifts;
     }
     if (left.estimate !== right.estimate) {
       return left.estimate < right.estimate;

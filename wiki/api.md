@@ -56,7 +56,8 @@ Zero displacement is not a command. A command costs one action irrespective of
 The result is a sequence of these commands, `[]` if already open, or `null` if
 unreachability has been proved. It is deterministic for identical valid inputs
 within a version. Consumers must not depend on a particular tie-breaking path
-across versions; minimum actions and legal completion are the guarantees.
+across versions. The guarantees are legal completion, minimum grouped actions,
+and then minimum unit shifts among solutions with that action count.
 
 `LockInputError` signals malformed lock input or configuration. `SearchLimitError` exposes a documented
 `limit` discriminator and `maximum`; it signals unavailable computation, never
@@ -150,5 +151,5 @@ With `--output`, the destination is created or overwritten before a success
 message is printed. Without it, no result file is created.
 
 A CLI process measures startup, parsing and filesystem work as well as the solver.
-Use the paired [benchmark harness](benchmarks.md) for algorithm timings;
+Use the [benchmark harness](benchmarks.md) for algorithm timings;
 use the CLI to measure your actual end-to-end command-line workload.

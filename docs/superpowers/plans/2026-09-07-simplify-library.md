@@ -1,58 +1,48 @@
-# Readability and delivery simplification
+# Simple CI and canary releases
 
-The owner requested a complete readability correction across `src/` and `.github/`.
-The prior directory cleanup did not make the implementation sufficiently clear.
-This is the one active plan; generated measurements and review notes stay outside Git.
+The owner replaced the previous delivery design with two simple workflows.
+Keep the solver, public API, five runtime outputs and strict local checks.
+This plan supersedes checkout-based benchmarks and the previous release flow.
 
-## Boundaries
+## CI
 
-Keep the flat ten-file source layout, two build entries, public tuple contract,
-optional validated configuration, CLI behavior and all five distribution files.
-Keep exact mathematics, deterministic command ordering, search budget semantics,
-all 45 fixed inputs, strict TypeScript and every required consumer environment.
-No source copies, tracked reports, extra service or new abstraction framework.
+- One job runs the existing checks, coverage, Vite builds, Node and browser consumers.
+- Measure the current built solver on all 45 fixed inputs.
+- For a PR, use its target SHA; for main pushes, use the previous main SHA.
+- Look up a successful CI report artifact for exactly that commit.
+- If no unexpired artifact exists, explicitly skip comparison. No source checkout,
+  rebuild, npm lookup, previous-release fallback or synthetic baseline.
+- Compare deterministic quality metrics; report historical timing/memory ratios
+  with their cross-run limitations. Keep generated output out of Git.
+- Save the benchmark report separately from the tested package artifact; name
+  artifacts with commit SHA and run attempt to avoid overwriting earlier attempts.
 
-Domain constants describe the fixed lock mechanics; they are not new config fields.
-Ordinary counters and binary arithmetic do not need decorative constants.
-Necessary matrix/search loops remain explicit, with short, cohesive bodies.
+## Release
 
-## Source
+- A separate workflow runs after successful main-push CI to publish a canary.
+- CI leaves tracked files unchanged. Release preparation assigns the canary or
+  stable version by changing package/build version metadata only.
+- Manual stable dispatch takes a successful main CI run ID and stable SemVer.
+- Download only that run's tested build artifact. No algorithm rebuild.
+- Stable packaging changes only package/build version metadata; verify all other
+  archive bytes remain identical before publishing the new npm version.
+- Publish to npm through OIDC, check registry/CDN delivery, attach five runtime
+  files, package archive and the benchmark report to the GitHub Release.
+- Keep the two workflows readable, one job each, using official pinned Actions.
+- Retain direct-publish setup and the readiness switch for first-package bootstrap.
 
-- [x] Review every source file, including small API, type and error modules.
-- [x] Replace opaque internal identifiers with domain names.
-- [x] Name position bounds, target, encoding units, storage byte sizes and sentinels.
-- [x] Separate matrix construction, pivot operations and result classification.
-- [x] Make search strategy selection, state expansion and path relaxation readable.
-- [x] Keep dense/sparse predecessor storage details out of BFS traversal.
-- [x] Express CLI IO and configuration validation as clear ordered operations.
-- [x] Preserve all 45 exact command paths and resource-limit behavior.
+## Execution
 
-## Delivery
+1. Replace module-vs-module benchmark machinery with current measurement and
+   optional saved-report comparison; test valid/missing/wrong-SHA reports.
+2. Replace release machinery with one release script; test canary identity,
+   stable metadata-only repack and publication boundaries without publishing.
+3. Test exact-SHA artifact selection and successful-main-only release selection.
+4. Complete all local gates before changing workflow YAML.
+5. Add the two workflows and update README, Wiki and agent instructions.
+6. After CI simplification, fix secondary solution ordering: minimize unit shifts
+   among paths already optimal in grouped actions. Verify lock-018 and all 45
+   inputs with an independent lexicographic oracle; preserve the public contract.
+7. Review independently, update draft PR #3 and verify CI on the exact new head.
 
-- [x] Review and simplify every script under `.github/scripts/`.
-- [x] Give preparation, publication and verification explicit responsibilities.
-- [x] Remove compressed multi-statement lines and deeply nested delivery branches.
-- [x] Preserve one verified archive, source identity, preceding-release baseline,
-  performance acceptance and idempotent recovery from partial publication.
-- [x] Verify helpers locally before editing workflow YAML.
-- [x] Use one `release.yml` workflow for PR checks, main publication and manual canary.
-- [x] Consolidate verification into one readonly job, including Node 26 source tests.
-- [x] Use a separate npm delivery job with fresh trusted-main preparation and OIDC;
-  verify npm/CDN bytes and real browser imports before the GitHub release job.
-- [x] Keep GitHub write permissions separate; candidate/fork code never becomes
-  privileged publication tooling.
-- [x] Preserve existing checks and canary behavior; do not remove features silently.
-
-## Verification and review
-
-- [x] Enforce supported Oxlint block-depth limits for source and delivery scripts.
-- [x] Run strict types/lint, existing behavior/oracle/config/CLI tests and coverage.
-- [x] Build and verify the same archive on Node 22/24/26 and real browser engines.
-- [x] Run the 45-input benchmark after competing heavy processes stop.
-- [x] Adapt and validate workflow YAML only after those local gates finish.
-- [x] Independently review every source/delivery file for maintainability, not only
-  correctness; resolve concrete findings before updating the draft PR.
-- [ ] Update the existing PR and inspect hosted CI on its exact commit.
-
-No merge or package publication is part of this correction. Hosted evidence and
-final execution status are linked from the draft PR, rather than copied into Git.
+No actual merge or package publication is authorized by this implementation task.

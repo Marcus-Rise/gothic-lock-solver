@@ -52,11 +52,12 @@ are allowed; explained `ts-expect-error` proves negative type-consumer cases.
 Vitest exports a plain configuration checked against public `TestUserConfig`;
 dependencies remain unmodified, without coupling Vite's resolved config types.
 
-Builds, archives, snapshots, raw benchmark reports, coverage, traces and review
+Builds, archives, benchmark reports, coverage, traces and review
 logs stay outside Git. Local output is ignored; CI uploads the same evidence and
 releases retain distribution evidence. Maintained explanations live in Wiki.
 Complete local gates before workflow edits, independently review the final diff,
-and check hosted CI. A green correctness gate does not approve noisy performance.
+and check hosted CI. Saved benchmark timing and memory ratios are historical
+observations, not paired performance guarantees.
 
 Official references: [TypeScript](https://www.typescriptlang.org/docs/handbook/intro.html),
 [Vite configuration](https://vite.dev/config/), [Vitest configuration](https://vitest.dev/config/),

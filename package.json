@@ -19,7 +19,6 @@
     "build": "node .github/scripts/build.ts",
     "verify:package": "node tests/e2e/verify-package.ts",
     "benchmark": "node tests/benchmarks/benchmark.ts",
-    "benchmark:compare": "node tests/benchmarks/compare.ts",
     "solve": "node src/cli.ts"
   },
   "description": "Exact shortest-action solver for Gothic 1 Remake plate locks.",

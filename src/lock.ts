@@ -204,3 +204,11 @@ export function readInt32(values: Int32Array, index: number): number {
   }
   return value;
 }
+
+export function readFloat64(values: Float64Array, index: number): number {
+  const value = values[index];
+  if (value === undefined) {
+    throw new Error(`Internal number-access invariant failed at ${index}.`);
+  }
+  return value;
+}

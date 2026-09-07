@@ -12,8 +12,8 @@ work is in the [current plan](docs/superpowers/plans/2026-09-07-simplify-library
   entries −1/0/+1, direct effects without cascading. Every affected pin stays in range.
 - Commands have zero-based indices and nonzero signed displacement −6…+6.
   Inputs and caller configuration remain unchanged.
-- Successful paths minimize grouped actions. Do not promise minimum unit shifts,
-  distinct plates or universal timing. `null` is proved unreachable; resource
+- Successful paths minimize grouped actions, then unit shifts among equal-action
+  paths. Do not promise minimum distinct plates or universal timing. `null` is proved unreachable; resource
   exhaustion throws `SearchLimitError`; invalid lock/config throws `LockInputError`.
 - `src/index.ts` and `src/cli.ts` are the two build entries. CLI invokes the same
   public solver/factory. Shared mathematics has one implementation.
@@ -50,13 +50,17 @@ source and requires 80% per metric. Verify Node.js 22/24/26, real Chromium/Firef
 WebKit, all five generated files, Workers and an installed archive.
 
 Run the [45-input benchmark](wiki/benchmarks.md) without competing heavy jobs.
-Use an independently checked-out actual PR target or verified own previous release.
-Candidate results cannot supply their own baseline. Preserve raw calibration and
-bounded repeats; uncertainty remains inconclusive. Never change expected minima
-or thresholds merely to turn a regression green.
+Compare only a saved CI report for the exact target SHA. If it is absent or
+expired, record that comparison was skipped. Never rebuild a target checkout or
+fall back to a registry/release baseline. Validate report source and catalog identity.
+Historical timing and memory ratios are observations across runs, not paired
+experiments. Preserve deterministic quality checks; do not change expected minima
+or comparison thresholds merely to turn a regression green.
 
 All local gates precede workflow edits. Independently review the final diff and
-check hosted CI on the exact head. Working logs/review outputs belong in ignored
+check hosted CI on the exact head. CI builds and checks; a separate release
+workflow publishes main canaries after successful CI and stable versions only
+through a manual dispatch selecting a tested main CI run. Working logs/review outputs belong in ignored
 `artifacts/` and CI artifacts. Use official SHA-pinned Actions, npm/gh CLIs and free
 standard runners. Keep the PR draft; merging and publication are separate actions.
 

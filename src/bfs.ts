@@ -7,6 +7,7 @@ import {
   movementLimits,
   readAt,
   readByte,
+  readFloat64,
   readInt32,
 } from './lock.ts';
 import type { PreparedSearch } from './lock.ts';
@@ -21,10 +22,18 @@ const DIRECTION_COUNT = DIRECTIONS.length;
 interface Predecessor {
   readonly parent: number;
   readonly action: number;
+  readonly actionCount: number;
+  readonly unitShifts: number;
 }
 
 type Records =
-  | { readonly dense: true; readonly parents: Int32Array; readonly actions: Uint8Array }
+  | {
+    readonly dense: true;
+    readonly parents: Int32Array;
+    readonly actions: Uint8Array;
+    readonly actionCounts: Int32Array;
+    readonly unitShifts: Float64Array;
+  }
   | { readonly dense: false; readonly parents: Map<number, Predecessor> };
 
 function encodeCommand(plate: number, direction: number, steps: number): number {
@@ -46,12 +55,15 @@ function hasVisited(records: Records, state: number): boolean {
     : records.parents.has(state);
 }
 
-function remember(records: Records, state: number, parent: number, action: number): void {
+function remember(records: Records, state: number, parent: number, action: number,
+  actionCount: number, unitShifts: number): void {
   if (records.dense) {
     records.parents[state] = parent;
     records.actions[state] = action;
+    records.actionCounts[state] = actionCount;
+    records.unitShifts[state] = unitShifts;
   } else {
-    records.parents.set(state, { parent, action });
+    records.parents.set(state, { parent, action, actionCount, unitShifts });
   }
 }
 
@@ -60,6 +72,8 @@ function readPredecessor(records: Records, state: number): Predecessor {
     return {
       parent: readInt32(records.parents, state),
       action: readByte(records.actions, state),
+      actionCount: readInt32(records.actionCounts, state),
+      unitShifts: readFloat64(records.unitShifts, state),
     };
   }
   const predecessor = records.parents.get(state);
@@ -79,7 +93,7 @@ function reconstruct(records: Records, initialCode: number, state: number): read
   return commands.reverse();
 }
 
-/** Exact grouped-action BFS; plate order, positive direction, then larger shifts. */
+/** Exact action layers; each next-layer state retains its least unit-shift cost. */
 export class BfsSearch {
   private readonly prepared: PreparedSearch;
   private readonly budget: SearchBudget;
@@ -90,6 +104,7 @@ export class BfsSearch {
   private readIndex = 0;
   private writeIndex = 0;
   private queuedStates = 0;
+  private goalFound = false;
 
   constructor(prepared: PreparedSearch, budget: SearchBudget) {
     this.prepared = prepared;
@@ -103,17 +118,18 @@ export class BfsSearch {
       return [];
     }
     this.initializeStorage();
-    remember(this.records, this.prepared.initialCode, ROOT_PARENT, 0);
+    remember(this.records, this.prepared.initialCode, ROOT_PARENT, 0, 0, 0);
     this.enqueue(this.prepared.initialCode);
 
     while (this.queuedStates > 0) {
-      this.budget.expand();
-      const state = this.dequeue();
-      decodeDigits(state, this.positionDigits);
-      for (let plate = 0; plate < this.prepared.plateCount; plate += 1) {
-        if (this.expandPlate(state, plate)) {
-          return reconstruct(this.records, this.prepared.initialCode, this.prepared.goalCode);
-        }
+      const layerSize = this.queuedStates;
+      for (let index = 0; index < layerSize; index += 1) {
+        const state = this.dequeue();
+        this.expandState(state);
+      }
+      // Every predecessor at this depth has now offered its cheapest goal path.
+      if (this.goalFound) {
+        return reconstruct(this.records, this.prepared.initialCode, this.prepared.goalCode);
       }
     }
     return null;
@@ -123,13 +139,20 @@ export class BfsSearch {
     const { stateCount } = this.prepared;
     const { maxVisited, maxFrontier, maxDenseBytes } = this.budget.options;
     this.queueCapacity = Math.min(stateCount, maxVisited, maxFrontier);
-    const bytesPerRecord = Int32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT;
+    const bytesPerRecord = 2 * Int32Array.BYTES_PER_ELEMENT
+      + Uint8Array.BYTES_PER_ELEMENT + Float64Array.BYTES_PER_ELEMENT;
     const denseBytes = stateCount * bytesPerRecord + this.queueCapacity * Int32Array.BYTES_PER_ELEMENT;
     // Dense parents are signed state codes; negative values are sentinels.
     const useDenseStorage = stateCount <= MAX_INT32 && denseBytes <= maxDenseBytes;
     try {
       this.records = useDenseStorage
-        ? { dense: true, parents: new Int32Array(stateCount).fill(UNVISITED), actions: new Uint8Array(stateCount) }
+        ? {
+          dense: true,
+          parents: new Int32Array(stateCount).fill(UNVISITED),
+          actions: new Uint8Array(stateCount),
+          actionCounts: new Int32Array(stateCount),
+          unitShifts: new Float64Array(stateCount),
+        }
         : { dense: false, parents: new Map() };
       this.queue = useDenseStorage ? new Int32Array(this.queueCapacity) : [];
     } catch (error) {
@@ -141,6 +164,7 @@ export class BfsSearch {
     this.readIndex = 0;
     this.writeIndex = 0;
     this.queuedStates = 0;
+    this.goalFound = false;
   }
 
   /** Ring-buffer storage retains only the live frontier, including sparse mode. */
@@ -160,23 +184,60 @@ export class BfsSearch {
     return state;
   }
 
-  private expandPlate(state: number, plate: number): boolean {
+  private expandState(state: number): void {
+    this.budget.expand();
+    decodeDigits(state, this.positionDigits);
+    const distance = readPredecessor(this.records, state);
+    for (let plate = 0; plate < this.prepared.plateCount; plate += 1) {
+      if (this.expandPlate(state, plate, distance)) {
+        // Every one-command route from this state to the goal costs the same.
+        return;
+      }
+    }
+  }
+
+  private expandPlate(state: number, plate: number, distance: Predecessor): boolean {
     const effect = readAt(this.prepared.effects, plate);
     const [positiveLimit, negativeLimit] = movementLimits(this.positionDigits, effect);
     for (const direction of DIRECTIONS) {
       const limit = direction > 0 ? positiveLimit : negativeLimit;
       for (let steps = limit; steps >= 1; steps -= 1) {
         const nextState = state + direction * steps * effect.stateCodeOffset;
-        if (hasVisited(this.records, nextState)) {
-          continue;
-        }
-        this.budget.visit();
-        remember(this.records, nextState, state, encodeCommand(plate, direction, steps));
-        if (nextState === this.prepared.goalCode) {
+        if (this.visitNeighbor(state, nextState, encodeCommand(plate, direction, steps), distance, steps)) {
           return true;
         }
-        this.enqueue(nextState);
       }
+    }
+    return false;
+  }
+
+  private visitNeighbor(state: number, nextState: number, action: number,
+    distance: Predecessor, steps: number): boolean {
+    const isGoal = nextState === this.prepared.goalCode;
+    if (this.goalFound && !isGoal) {
+      return false;
+    }
+    const actionCount = distance.actionCount + 1;
+    const unitShifts = distance.unitShifts + steps;
+    if (!Number.isSafeInteger(unitShifts)) {
+      throw new SearchLimitError('matrixArithmetic', Number.MAX_SAFE_INTEGER, unitShifts);
+    }
+    const visited = hasVisited(this.records, nextState);
+    if (visited) {
+      const previous = readPredecessor(this.records, nextState);
+      if (previous.actionCount !== actionCount || previous.unitShifts <= unitShifts) {
+        return false;
+      }
+    } else {
+      this.budget.visit();
+    }
+    remember(this.records, nextState, state, action, actionCount, unitShifts);
+    if (isGoal) {
+      this.goalFound = true;
+      return true;
+    }
+    if (!visited) {
+      this.enqueue(nextState);
     }
     return false;
   }

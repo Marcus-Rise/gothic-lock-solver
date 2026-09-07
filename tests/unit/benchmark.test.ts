@@ -1,65 +1,81 @@
-import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { releaseAssets } from '../../.github/scripts/release-lib.ts';
-import { array, commandMetrics, replayCommands, legacyCommands, record } from '../benchmarks/validation.ts';
-import { compareMetrics, confirmPerformance, performanceVerdict, statistics } from '../benchmarks/comparison.ts';
-import { catalogSha256, loadCatalog, sha256 } from '../benchmarks/catalog.ts';
-import { publishReport, readSnapshot, runComparison, writeSnapshot, type Implementation } from '../benchmarks/harness.ts';
-
-import { inspectComparisonBaseline, inspectSource, validateSource } from '../benchmarks/source.ts';
-import { snapshotFromImplementation } from '../benchmarks/snapshot.ts';
-import { assertArtifactOutput, collectMetadata, parseBenchmarkArgs } from '../benchmarks/cli.ts';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { commandMetrics, replayCommands, type Definition } from '../benchmarks/validation.ts';
+import { compareMetrics, statistics } from '../benchmarks/comparison.ts';
+import { catalogSha256, loadCatalog } from '../benchmarks/catalog.ts';
+import { createReport, loadImplementation, parseReport, publishReport, readReport, runBenchmark, type BenchmarkReport } from '../benchmarks/harness.ts';
+import { assertArtifactOutput, parseBenchmarkArgs } from '../benchmarks/cli.ts';
+import { measureRss, type MemoryMeasurement } from '../benchmarks/memory.ts';
 
 const definition = { state: [3, 4], links: [[0, 0], [0, 0]] };
 const commands: readonly (readonly [number, number])[] = [[0, 1]];
 const fixture = { id: 'unit', ...definition, expectedActions: 1 };
-const source = { revision: '1'.repeat(40), moduleSha256: '2'.repeat(64), format: 'tuple' };
-const implementation = (solve: Implementation['solve'] = () => commands): Implementation => ({
-  label: 'unit', solve, normalize: (value) => value,
+const source = { revision: '1'.repeat(40), dirty: false, moduleSha256: '2'.repeat(64) };
+const environment = { node: process.version, v8: process.versions.v8, platform: process.platform, arch: process.arch,
+  cpu: 'unit test', logicalCpus: 1, osRelease: 'test', totalMemoryBytes: 1024 };
+const settings = { warmups: 0, repetitions: 1, memoryRepetitions: 1 };
+const memory: MemoryMeasurement = { metric: 'linux-proc-VmHWM', limitations: 'Whole-process approximate RSS, including Node; not browser memory.',
+  browser: { available: false, reason: 'No portable browser peak-memory API.' },
+  samples: [{ peakRssBytes: 20, startupRssBytes: 10, loadedRssBytes: 12, lockCount: 45, peakRssMetric: 'linux-proc-VmHWM', startupPeakRssBytes: 10,
+    loadedPeakRssBytes: 12, resourceUsageMaxRssBytes: 30, startupResourceUsageMaxRssBytes: 30, resourceUsageLaunchFloorDetected: true }],
+  peakRssBytes: statistics([20]) };
+let fullReport: BenchmarkReport;
+beforeAll(async () => {
+  const solver = await loadImplementation(new URL('../../src/index.ts', import.meta.url).pathname);
+  const results = runBenchmark({ solve: solver, warmups: 0, repetitions: 1 });
+  fullReport = createReport({ source, environment, settings, results, memory });
 });
 
-describe('benchmark replay independent of production transitions', () => {
-  it('uses zero-based numeric deltas, simultaneous outgoing links and every intermediate click', () => {
+describe('independent benchmark replay', () => {
+  it('uses outgoing links and checks every intermediate unit shift', () => {
     expect(replayCommands(definition, commands)).toEqual([4, 4]);
     expect(replayCommands({ state: [2, 5, 6], links: [[0, -1, 0], [0, 0, 1], [0, 0, 0]] }, [[0, 2]])).toEqual([4, 3, 6]);
     expect(() => replayCommands({ state: [6, 6], links: [[0, 1], [0, 0]] }, [[0, 2]])).toThrow(/blocked/i);
     expect(definition.state).toEqual([3, 4]);
   });
-  it('rejects invalid tuple and command coordinates', () => {
+  it('rejects invalid commands', () => {
     for (const invalid of [[[0, 0]], [[-1, 1]], [[2, 1]], [[0, 7]], [[0, 1.5]], [[0, 1, 2]], [{ plate: 1 }]]) {
       expect(() => replayCommands(definition, invalid)).toThrow(/command/i);
     }
   });
-  it('measures A/U/C/switches and converts legacy left to positive numeric delta', () => {
+  it('reports actions, distinct plates, unit shifts and plate switches', () => {
     expect(commandMetrics([[0, 2], [1, -3], [0, 1]])).toEqual({ A: 3, U: 2, C: 6, plateSwitches: 2 });
-    expect(legacyCommands([{ plate: 1, direction: 'left', steps: 2 }, { plate: 2, direction: 'right', steps: 3 }])).toEqual([[0, 2], [1, -3]]);
   });
 });
 
-describe('deterministic and environmental verdicts stay separate', () => {
-  it('fails every metric regression even if another metric improves', () => {
-    expect(compareMetrics({ A: 4, U: 1, C: 6, plateSwitches: 0 }, { A: 3, U: 2, C: 8, plateSwitches: 1 }).quality).toBe('regression');
-    expect(compareMetrics({ A: 3, U: 3, C: 7, plateSwitches: 1 }, { A: 3, U: 2, C: 8, plateSwitches: 1 }).quality).toBe('regression');
-    expect(compareMetrics({ A: 3, U: 2, C: 9, plateSwitches: 1 }, { A: 3, U: 2, C: 8, plateSwitches: 1 }).quality).toBe('regression');
-    expect(compareMetrics({ A: 3, U: 2, C: 8, plateSwitches: 2 }, { A: 3, U: 2, C: 8, plateSwitches: 1 }).quality).toBe('regression');
+describe('current solver measurement', () => {
+  it('runs all 45 fixed inputs with their unchanged exact minima', () => {
+    expect(loadCatalog()).toHaveLength(45);
+    expect(loadCatalog().reduce((sum, lock) => sum + lock.expectedActions, 0)).toBe(483);
+    expect(fullReport.results).toHaveLength(45);
+    expect(fullReport.totals.A).toBe(483);
+    expect(fullReport.quality).toBe('passed');
+    expect(fullReport.comparison).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/saved.*report/i) });
   });
-  it('calibrates uncertainty from self-comparison and never uses historical times as proof', () => {
-    expect(performanceVerdict([10, 10, 10, 10, 10], [10, 10, 10, 10, 10], [10, 10, 10, 10, 10], [10, 10, 10, 10, 10]).verdict).toBe('passed');
-    expect(performanceVerdict([20, 20, 20, 20, 20], [10, 10, 10, 10, 10], [10, 10, 10, 10, 10], [10, 10, 10, 10, 10]).verdict).toBe('regression');
-    expect(performanceVerdict([20], [10], [10], [10]).verdict).toBe('inconclusive');
-    expect(performanceVerdict([10, 20, 10, 20, 10], [10, 10, 10, 10, 10], [5, 20, 5, 20, 5], [10, 10, 10, 10, 10]).verdict).toBe('inconclusive');
-    expect(performanceVerdict([10, 10, 10, 10, 10], [10, 10, 10, 10, 10], [], []).verdict).toBe('inconclusive');
+  it('retains raw measurements while excluding warmups', () => {
+    let calls = 0;
+    let clock = 0;
+    const results = runBenchmark({ locks: [fixture], solve: () => { calls += 1; clock += calls; return commands; },
+      warmups: 2, repetitions: 3, clock: () => clock });
+    expect(calls).toBe(5);
+    expect(results[0]?.samplesMs).toEqual([3, 4, 5]);
+    expect(results[0]?.timingMs).toEqual({ min: 3, median: 4, p95: 5, max: 5 });
   });
-  it('requires repeat confirmation of an environmental regression and preserves conflicting signals', () => {
-    expect(confirmPerformance('regression', 'regression')).toBe('regression');
-    expect(confirmPerformance('regression', 'passed')).toBe('inconclusive');
-    expect(confirmPerformance('inconclusive', 'passed')).toBe('inconclusive');
-    expect(confirmPerformance('passed', 'passed')).toBe('passed');
+  it('checks input immutability, completion and minimum actions during warmups too', () => {
+    const run = (solve: (input: Definition) => unknown) => runBenchmark({ locks: [fixture], solve, warmups: 1, repetitions: 1 });
+    expect(() => run(() => null)).toThrow(/solvability/i);
+    expect(() => run(() => [])).toThrow(/target/i);
+    expect(() => run(() => [[0, 2], [0, -1]])).toThrow(/minimum/i);
+    expect(() => run((input) => { input.state[0] = 4; return commands; })).toThrow(/mutat/i);
   });
-  it('retains raw sample order and computes nearest-rank p95', () => {
+  it('rejects nondeterministic equal-optimum paths', () => {
+    const lock = { id: 'choice', state: [3, 3], links: [[0, 1], [1, 0]], expectedActions: 1 };
+    let calls = 0;
+    expect(() => runBenchmark({ locks: [lock], solve: () => [[calls++ % 2, 1]], warmups: 1, repetitions: 1 })).toThrow(/determin/i);
+  });
+  it('computes median and nearest-rank p95 without reordering samples', () => {
     const samples = [9, 1, 5, 3];
     expect(statistics(samples)).toEqual({ min: 1, median: 4, p95: 9, max: 9 });
     expect(samples).toEqual([9, 1, 5, 3]);
@@ -67,272 +83,95 @@ describe('deterministic and environmental verdicts stay separate', () => {
   });
 });
 
-describe('evidence trust boundaries', () => {
-  it('retains only all 45 fixed numerical fixtures and mathematical expectations', () => {
-    const locks = loadCatalog();
-    expect(locks).toHaveLength(45);
-    expect(Object.keys(locks[0] ?? {}).sort()).toEqual(['expectedActions', 'id', 'links', 'state']);
-    expect(locks.reduce((sum, lock) => sum + lock.expectedActions, 0)).toBe(483);
+describe('saved report comparison', () => {
+  it('compares stored metrics and historical ratios without executing a baseline', () => {
+    const baseline = structuredClone(fullReport);
+    for (const row of baseline.results) { row.samplesMs = row.samplesMs.map((value) => value / 2); row.timingMs = statistics(row.samplesMs); }
+    const report = createReport({ source, environment, settings, results: fullReport.results, memory, baseline });
+    expect(report.quality).toBe('passed');
+    expect(report.comparison).toMatchObject({ status: 'compared', baselineSha: source.revision, quality: 'passed',
+      memoryPeakMedianRatio: 1, limitations: expect.stringMatching(/historical.*informational/i) });
+    if (report.comparison.status !== 'compared') throw new Error('Missing comparison');
+    expect(report.comparison.results[0]?.timingMedianRatio).toBe(2);
+    expect(report.comparison.results[0]?.deltas).toEqual({ A: 0, U: 0, C: 0, plateSwitches: 0 });
+    expect(parseReport(report)).toEqual(report);
   });
-  it('rejects missing source identity and mismatched module, format or revision', async () => {
-    expect(() => validateSource({})).toThrow(/source|baseline/i);
-    expect(() => inspectSource('/missing/own-baseline.ts', 'tuple')).toThrow();
-    const root = await mkdtemp(join(tmpdir(), 'benchmark-source-'));
-    const module = join(root, 'solver.ts');
+  it('fails an increase in every deterministic metric independently', () => {
+    const baseline = { A: 3, U: 2, C: 8, plateSwitches: 1 };
+    for (const name of ['A', 'U', 'C', 'plateSwitches'] as const) {
+      expect(compareMetrics({ ...baseline, [name]: baseline[name] + 1 }, baseline)).toMatchObject({ quality: 'regression', regressions: [name] });
+    }
+    expect(compareMetrics({ A: 3, U: 1, C: 9, plateSwitches: 0 }, baseline).quality).toBe('regression');
+  });
+  it('accepts only exact source SHA reports and requires clean source identity', () => {
+    expect(parseReport(fullReport, source.revision)).toEqual(fullReport);
+    expect(() => parseReport(fullReport, '3'.repeat(40))).toThrow(/source|revision|SHA/i);
+    expect(() => parseReport({ ...fullReport, source: { ...source, dirty: true } }, source.revision)).toThrow(/dirty|clean/i);
+    expect(() => parseReport({ ...fullReport, source: {} })).toThrow(/source|revision/i);
+  });
+  it('rejects corrupt schema, catalog, incomplete rows and fabricated measurements', () => {
+    const first = fullReport.results[0];
+    if (first === undefined) throw new Error('Fixture missing');
+    for (const change of [
+      { schemaVersion: 1 }, { fixtures: { count: 45, catalogSha256: '0'.repeat(64) } },
+      { results: fullReport.results.slice(1) }, { results: [first, ...fullReport.results.slice(0, 44)] },
+      { results: [{ ...first, C: first.C + 1 }, ...fullReport.results.slice(1)] },
+      { results: [{ ...first, commands: [] }, ...fullReport.results.slice(1)] },
+      { results: [{ ...first, timingMs: { ...first.timingMs, median: first.timingMs.median + 1 } }, ...fullReport.results.slice(1)] },
+      { totals: { ...fullReport.totals, A: 0 } }, { memory: { ...memory, peakRssBytes: statistics([1]) } },
+      { quality: 'regression' }, { comparison: { status: 'skipped' } },
+    ]) expect(() => parseReport({ ...fullReport, ...change })).toThrow();
+  });
+  it('rejects missing and malformed provided report files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'benchmark-corrupt-'));
     try {
-      await writeFile(module, 'export function solveLock() { return [[0, 1]]; }\n');
-      expect(() => inspectSource(module, 'tuple')).toThrow(/own Git checkout|identity/);
-      expect(() => inspectSource(module, 'tuple', source)).toThrow(/hash/);
-      const pinned = { ...source, moduleSha256: sha256(await readFile(module)) };
-      expect(() => inspectSource(module, 'tuple', pinned)).toThrow(/verified release/);
-      expect(() => inspectSource(module, 'legacy', pinned)).toThrow(/format/);
-      execFileSync('git', ['init', '--quiet', root]);
-      execFileSync('git', ['-C', root, 'add', '.']);
-      execFileSync('git', ['-C', root, '-c', 'user.name=Benchmark Test', '-c', 'user.email=benchmark@example.invalid', 'commit', '--quiet', '-m', 'Own baseline']);
-      expect(() => inspectSource(module, 'tuple', pinned)).toThrow(/revision/);
+      const path = join(root, 'benchmark.json');
+      expect(() => readReport(path, source.revision)).toThrow();
+      await writeFile(path, '{broken');
+      expect(() => readReport(path, source.revision)).toThrow();
     } finally { await rm(root, { recursive: true, force: true }); }
-  });
-  it('pins every own checkout source file directly to Git without copying it', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'benchmark-source-'));
-    try {
-      await mkdir(join(root, 'src'));
-      const module = join(root, 'src', 'solver.ts');
-      const dependency = join(root, 'src', 'dependency.ts');
-      await writeFile(module, 'export function solveLock() { return [[0, 1]]; }\n');
-      await writeFile(dependency, 'export const value = 1;\n');
-      execFileSync('git', ['init', '--quiet', root]);
-      execFileSync('git', ['-C', root, 'add', '.']);
-      execFileSync('git', ['-C', root, '-c', 'user.name=Benchmark Test', '-c', 'user.email=benchmark@example.invalid', 'commit', '--quiet', '-m', 'Own baseline']);
-      const pinned = inspectSource(module, 'tuple');
-      expect(inspectSource(module, 'tuple', pinned)).toEqual(pinned);
-      await writeFile(dependency, 'export const value = 1;\n\n');
-      expect(() => inspectSource(module, 'tuple')).toThrow(/source hash/);
-      expect(() => inspectSource(module, 'tuple', pinned)).toThrow(/tree hash/);
-      await writeFile(dependency, 'export const value = 1;\n');
-      await writeFile(join(root, 'src', 'untracked.ts'), 'export const value = 2;\n');
-      expect(() => inspectSource(module, 'tuple')).toThrow(/untracked source/);
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
-  it('generates snapshot quality by executing only the explicitly supplied baseline', () => {
-    let calls = 0;
-    const snapshot = snapshotFromImplementation(implementation(() => { calls += 1; return commands; }), source, 'own baseline', [fixture]);
-    expect(calls).toBe(1);
-    expect(snapshot.source).toEqual(source);
-    expect(snapshot.locks).toEqual([{ id: 'unit', optimumA: 1, ...commandMetrics(commands), commands }]);
-    expect(() => snapshotFromImplementation(implementation(() => []), source, 'own baseline', [fixture])).toThrow(/target/);
-    expect(() => snapshotFromImplementation(implementation(), {}, 'own baseline', [fixture])).toThrow(/source|baseline/);
-  });
-  it('never overwrites a quality snapshot', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'benchmark-snapshot-'));
-    const path = join(root, 'quality.json');
-    try {
-      await writeSnapshot(path, { reason: 'initial', locks: [] });
-      const initial = await readFile(path, 'utf8');
-      await expect(writeSnapshot(path, { reason: 'replacement', locks: [] })).rejects.toThrow();
-      expect(await readFile(path, 'utf8')).toBe(initial);
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
-  it('validates warmups, measured paths, determinism, input immutability and exact action optimum', () => {
-    let calls = 0;
-    const setup = { locks: [fixture], candidate: implementation(), baseline: implementation(), repetitions: 5, warmups: 1 };
-    expect(runComparison(setup).quality).toBe('passed');
-    expect(() => runComparison({ ...setup, candidate: implementation(() => []) })).toThrow(/target|minimum/i);
-    expect(() => runComparison({ ...setup, candidate: implementation((input) => { input.state[0] = 4; return commands; }) })).toThrow(/mutat/i);
-    expect(() => runComparison({ ...setup, candidate: implementation(() => ++calls === 1 ? commands : [[0, 2], [0, -1]]) })).toThrow(/minimum|determin/i);
   });
 });
 
-it('requires explicit baseline inputs and rejects unsafe or ambiguous CLI settings', () => {
-  expect(() => parseBenchmarkArgs([])).toThrow(/explicit/);
-  expect(parseBenchmarkArgs(['--baseline-module', '/base.mjs', '--baseline-format', 'legacy']).outputDir).toMatch(/artifacts\/benchmark$/);
-  expect(parseBenchmarkArgs(['--baseline-module', '/base.mjs', '--baseline-format', 'legacy']).baselineSnapshot).toBeUndefined();
-  expect(parseBenchmarkArgs(['--baseline-module', '/base.mjs', '--baseline-snapshot', '/quality.json', '--baseline-format', 'legacy']).baselineFormat).toBe('legacy');
-  for (const args of [['--warmups', '-1'], ['--warmups', '01'], ['--repetitions', '0'], ['--warmups', '1', '--warmups', '2'], ['--reference'], ['--unknown', '1']]) {
-    expect(() => parseBenchmarkArgs(args)).toThrow(/argument|integer/);
+it('accepts a standalone CLI and requires a target SHA for a provided report', () => {
+  expect(parseBenchmarkArgs([])).toMatchObject({ warmups: 2, repetitions: 7, memoryRepetitions: 3 });
+  expect(parseBenchmarkArgs([]).outputDir).toMatch(/artifacts\/benchmark$/);
+  expect(parseBenchmarkArgs(['--baseline-sha', source.revision]).baselineReport).toBeUndefined();
+  expect(parseBenchmarkArgs(['--baseline-report', '/saved.json', '--baseline-sha', source.revision]).baselineReport).toBe('/saved.json');
+  for (const args of [['--baseline-report', '/saved.json'], ['--baseline-sha', 'main'], ['--baseline-module', '/base.mjs'],
+    ['--baseline-snapshot', '/snapshot.json'], ['--smoke'], ['--skip-memory'], ['--warmups', '-1'], ['--warmups', '01'],
+    ['--repetitions', '0'], ['--warmups', '1', '--warmups', '2'], ['--unknown']]) {
+    expect(() => parseBenchmarkArgs(args)).toThrow();
   }
 });
 
-it('rejects unsupported comparison slots', () => {
-  expect(() => parseBenchmarkArgs(['--reference', '/separate-checkout'])).toThrow(/Unknown argument/);
-});
-
-it('reports only measurements of the supplied project implementations', () => {
-  const report = runComparison({ locks: [fixture], candidate: implementation(), baseline: implementation(), repetitions: 1, warmups: 0 });
-  expect(Object.keys(report.implementations)).toEqual(['candidate', 'baseline']);
-  expect(report.results[0]).not.toHaveProperty('historicalReference');
-});
-
-it('checks target-branch snapshot against the live base independently of candidate expectations', () => {
-  const baselineSnapshot = { schemaVersion: 1, fixtureSha256: catalogSha256, source: {}, reason: 'test baseline',
-    locks: [{ id: 'unit', optimumA: 1, ...commandMetrics(commands), commands: [[0, 2], [0, -1]] as const }] };
-  expect(() => runComparison({ locks: [fixture], candidate: implementation(), baseline: implementation(), baselineSnapshot, repetitions: 1, warmups: 0 })).toThrow(/snapshot path drift/);
-
-});
-
-it('publishes report, Markdown and hash-linked release evidence without changing earlier reports', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'benchmark-report-'));
+it('publishes exactly JSON and Markdown with full rows and explicit skipped comparison', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'benchmark-output-'));
   try {
-    const report = runComparison({ locks: [fixture], candidate: implementation(), baseline: implementation(), repetitions: 1, warmups: 0 });
-    const first = await publishReport(report, root); const previous = await readFile(first.jsonPath, 'utf8');
-    const second = await publishReport(report, root);
-    expect(second.directory).not.toBe(first.directory);
-    expect(await readFile(first.jsonPath, 'utf8')).toBe(previous);
-    const parsed: unknown = JSON.parse(await readFile(first.evidencePath, 'utf8'));
-    const evidence = record(parsed);
-    expect(record(record(evidence['reports'])['json'])['sha256']).toBe(sha256(previous));
-    expect(record(array(record(evidence['qualitySnapshot'])['locks'])[0])['commands']).toEqual(commands);
-    expect(await readFile(first.markdownPath, 'utf8')).toMatch(/inconclusive/);
+    const paths = await publishReport(fullReport, root);
+    expect((await readdir(root)).sort()).toEqual(['benchmark.json', 'benchmark.md']);
+    expect(readReport(paths.jsonPath, source.revision)).toEqual(fullReport);
+    const markdown = await readFile(paths.markdownPath, 'utf8');
+    expect(markdown).toMatch(/comparison.*skipped/i);
+    expect(markdown).toContain('lock-045');
+    expect(markdown).toMatch(/actions.*distinct plates.*unit shifts.*switches/i);
+    expect(markdown).toMatch(/Node.*browser/i);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-it('isolated RSS worker restricts its workload to the selected smoke fixtures', async () => {
-  const { measureRss } = await import('../benchmarks/memory.ts');
-  const result = measureRss({ name: 'baseline', module: new URL('../../src/index.ts', import.meta.url).pathname, format: 'tuple' }, loadCatalog().slice(0, 2).map((lock) => lock.id).join(','));
-  expect(result.lockCount).toBe(2);
-  expect(result.peakRssBytes).toBeGreaterThan(0);
-  expect(result.startupRssBytes).toBeGreaterThan(0);
+it('measures only the requested current solver in an isolated RSS worker', () => {
+  const ids = loadCatalog().slice(0, 2).map((lock) => lock.id);
+  const sample = measureRss(new URL('../../src/index.ts', import.meta.url).pathname, ids);
+  expect(sample.lockCount).toBe(2);
+  expect(sample.peakRssBytes).toBeGreaterThan(0);
+  expect(sample.startupRssBytes).toBeGreaterThan(0);
+  expect(sample.peakRssMetric).toBe(process.platform === 'linux' ? 'linux-proc-VmHWM' : 'node-resourceUsage-maxRSS');
+  expect(sample.resourceUsageMaxRssBytes).toBeGreaterThan(0);
 });
 
-it('names the process-image RSS metric and preserves launch-floor diagnostics', async () => {
-  const { measureRss } = await import('../benchmarks/memory.ts');
-  const result = measureRss({ name: 'baseline', module: new URL('../../src/index.ts', import.meta.url).pathname, format: 'tuple' }, loadCatalog()[0]?.id);
-  expect(result.peakRssMetric).toBe(process.platform === 'linux' ? 'linux-proc-VmHWM' : 'node-resourceUsage-maxRSS');
-  expect(result.startupPeakRssBytes).toBeGreaterThan(0);
-  expect(result.resourceUsageMaxRssBytes).toBeGreaterThan(0);
-});
-
-
-it('requires ignored artifact output paths and rejects snapshots with missing identity', async () => {
+it('keeps report output in ignored artifacts and retains the fixed catalog hash', () => {
   expect(() => assertArtifactOutput('docs/benchmarks')).toThrow(/ignored artifacts/);
   expect(() => assertArtifactOutput('artifacts/../tests')).toThrow(/ignored artifacts/);
   expect(() => assertArtifactOutput('artifacts/benchmark')).not.toThrow();
-  const root = await mkdtemp(join(tmpdir(), 'benchmark-snapshot-'));
-  try {
-    const path = join(root, 'snapshot.json');
-    await writeSnapshot(path, { schemaVersion: 1, fixtureSha256: catalogSha256, source: {}, reason: 'missing identity', locks: [] });
-    expect(() => readSnapshot(path)).toThrow(/source|identity|baseline/);
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
-
-
-it('retains both complete raw timing attempts when a matched slowdown repeats', () => {
-  let elapsed = 0;
-  const order: string[] = [];
-  const measured = (name: string, duration: number) => implementation(() => { order.push(name); elapsed += duration; return commands; });
-  const report = runComparison({ locks: [fixture], candidate: measured('candidate', 2), baseline: measured('baseline', 1), repetitions: 5, warmups: 0, clock: () => elapsed });
-  const row = report.results[0];
-  expect(row?.timing.verdict).toBe('regression');
-  expect(row?.timingAttempts).toHaveLength(2);
-  for (const attempt of row?.timingAttempts ?? []) {
-    expect(attempt.candidate).toEqual([2, 2, 2, 2, 2]);
-    expect(attempt.baseline).toEqual([1, 1, 1, 1, 1]);
-    expect(attempt.selfA).toEqual([1, 1, 1, 1, 1]);
-    expect(attempt.selfB).toEqual([1, 1, 1, 1, 1]);
-  }
-  expect(order.slice(10, 14)).toEqual(['candidate', 'baseline', 'baseline', 'candidate']);
-});
-
-async function makeTypedCheckout() {
-  const directory = await mkdtemp(join(tmpdir(), 'benchmark-typed-base-'));
-  await mkdir(join(directory, 'src'));
-  await mkdir(join(directory, 'dist'));
-  await writeFile(join(directory, '.gitignore'), 'dist/\n');
-  const trackedModule = join(directory, 'src', 'index.ts');
-  await writeFile(trackedModule, 'export function solveLock() { return [[0, 1]]; }\n');
-  execFileSync('git', ['init', '--quiet', directory]);
-  execFileSync('git', ['-C', directory, 'add', '.']);
-  execFileSync('git', ['-C', directory, '-c', 'user.name=Benchmark Test', '-c', 'user.email=benchmark@example.invalid', 'commit', '--quiet', '-m', 'Own typed source']);
-  const revision = execFileSync('git', ['-C', directory, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  const module = join(directory, 'dist', 'gothic-lock-solver.mjs');
-  await writeFile(module, 'export function solveLock() { return [[0, 1]]; }\n');
-  const manifest = { schemaVersion: 1, package: 'gothic-lock-solver', version: '1.0.0', sourceSha: revision,
-    files: { 'gothic-lock-solver.mjs': sha256(await readFile(module)) } };
-  return { directory, trackedModule, module, manifest, manifestPath: join(directory, 'dist', 'manifest.json') };
-}
-
-describe('typed baseline build provenance', () => {
-  it.each(['missing manifest', 'stale revision', 'wrong module checksum'] as const)('rejects %s in an otherwise clean checkout', async (problem) => {
-    const checkout = await makeTypedCheckout();
-    try {
-      if (problem !== 'missing manifest') await writeFile(checkout.manifestPath, JSON.stringify({ ...checkout.manifest,
-        ...(problem === 'stale revision' ? { sourceSha: '0'.repeat(40) } : { files: { 'gothic-lock-solver.mjs': '0'.repeat(64) } }) }));
-      expect(() => inspectSource(checkout.module, 'tuple')).toThrow(/manifest|revision|checksum|hash/);
-    } finally { await rm(checkout.directory, { recursive: true, force: true }); }
-  });
-  it('accepts the module whose manifest pins its checkout revision and bytes', async () => {
-    const checkout = await makeTypedCheckout();
-    try {
-      await writeFile(checkout.manifestPath, JSON.stringify(checkout.manifest));
-      expect(inspectSource(checkout.module, 'tuple')).toMatchObject({ revision: checkout.manifest.sourceSha, moduleSha256: checkout.manifest.files['gothic-lock-solver.mjs'] });
-    } finally { await rm(checkout.directory, { recursive: true, force: true }); }
-  });
-  it('rejects a baseline module from the candidate checkout before measuring', async () => {
-    const checkout = await makeTypedCheckout();
-    try {
-      await writeFile(checkout.manifestPath, JSON.stringify(checkout.manifest));
-      const baseline = inspectSource(checkout.trackedModule, 'tuple');
-      const snapshot = snapshotFromImplementation(implementation(), baseline, 'test', [fixture]);
-      const options = parseBenchmarkArgs(['--candidate-module', checkout.module, '--baseline-module', checkout.trackedModule]);
-      expect(() => collectMetadata(options, snapshot)).toThrow(/same.*checkout|candidate.*checkout/);
-    } finally { await rm(checkout.directory, { recursive: true, force: true }); }
-  });
-  it('rejects a separate checkout at the candidate revision', async () => {
-    const checkout = await makeTypedCheckout();
-    const copy = await mkdtemp(join(tmpdir(), 'benchmark-same-revision-'));
-    try {
-      execFileSync('git', ['clone', '--quiet', checkout.directory, copy]);
-      const baselineModule = join(copy, 'src', 'index.ts');
-      const baseline = inspectSource(baselineModule, 'tuple');
-      const snapshot = snapshotFromImplementation(implementation(), baseline, 'test', [fixture]);
-      const options = parseBenchmarkArgs(['--candidate-module', checkout.trackedModule, '--baseline-module', baselineModule]);
-      expect(() => collectMetadata(options, snapshot)).toThrow(/same.*revision|candidate.*revision/);
-    } finally { await rm(checkout.directory, { recursive: true, force: true }); await rm(copy, { recursive: true, force: true }); }
-  });
-});
-
-
-it('rejects a symlink alias of the candidate module', async () => {
-  const checkout = await makeTypedCheckout();
-  const aliasRoot = await mkdtemp(join(tmpdir(), 'benchmark-module-alias-'));
-  try {
-    const alias = join(aliasRoot, 'baseline.ts');
-    await symlink(checkout.trackedModule, alias);
-    expect(() => inspectComparisonBaseline(checkout.trackedModule, alias, 'tuple')).toThrow(/same module/);
-  } finally { await rm(checkout.directory, { recursive: true, force: true }); await rm(aliasRoot, { recursive: true, force: true }); }
-});
-
-it('accepts identical module bytes from a separate checkout at a different target revision', async () => {
-  const checkout = await makeTypedCheckout();
-  const copy = await mkdtemp(join(tmpdir(), 'benchmark-other-revision-'));
-  try {
-    execFileSync('git', ['clone', '--quiet', checkout.directory, copy]);
-    execFileSync('git', ['-C', copy, '-c', 'user.name=Benchmark Test', '-c', 'user.email=benchmark@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'Another target revision']);
-    const baseline = join(copy, 'src', 'index.ts');
-    expect(inspectComparisonBaseline(checkout.trackedModule, baseline, 'tuple')).toHaveProperty('moduleSha256', sha256(await readFile(checkout.trackedModule)));
-  } finally { await rm(checkout.directory, { recursive: true, force: true }); await rm(copy, { recursive: true, force: true }); }
-});
-
-it('allows a same-revision preceding release only with its verified manifest and evidence chain', async () => {
-  const checkout = await makeTypedCheckout();
-  try {
-    const release = join(checkout.directory, 'artifacts', 'baseline');
-    await mkdir(release, { recursive: true });
-    const module = join(release, 'baseline.mjs');
-    await writeFile(module, await readFile(checkout.module));
-    const originalSource = { revision: checkout.manifest.sourceSha, moduleSha256: sha256(await readFile(module)), format: 'tuple' };
-    const evidenceBytes = JSON.stringify({ qualitySnapshot: { source: originalSource } });
-    const evidenceHash = sha256(evidenceBytes);
-    const assets = { ...Object.fromEntries(releaseAssets.map((name) => [name, 'a'.repeat(64)])),
-      'gothic-lock-solver.mjs': originalSource.moduleSha256, 'benchmark-evidence.json': evidenceHash };
-    const manifestBytes = JSON.stringify({ schemaVersion: 1, name: 'gothic-lock-solver', version: '1.0.0', sourceSha: originalSource.revision,
-      kind: 'stable', tarballSha256: 'a'.repeat(64), assets });
-    const pinned = { ...originalSource, kind: 'previous-stable-release', releaseVersion: '1.0.0',
-      releaseManifestSha256: sha256(manifestBytes), releaseEvidenceSha256: evidenceHash };
-    expect(() => inspectComparisonBaseline(checkout.trackedModule, module, 'tuple', pinned)).toThrow(/manifest/);
-    await writeFile(join(release, 'previous-release-manifest.json'), manifestBytes);
-    await writeFile(join(release, 'previous-benchmark-evidence.json'), evidenceBytes);
-    expect(inspectComparisonBaseline(checkout.trackedModule, module, 'tuple', pinned)).toMatchObject(pinned);
-    await writeFile(join(release, 'previous-benchmark-evidence.json'), `${evidenceBytes} `);
-    expect(() => inspectComparisonBaseline(checkout.trackedModule, module, 'tuple', pinned)).toThrow(/evidence hash/);
-  } finally { await rm(checkout.directory, { recursive: true, force: true }); }
+  expect(catalogSha256).toBe('902a57e0c867b7ed7513af09257fde765396593ab45738bb60967b412b4bcd69');
 });

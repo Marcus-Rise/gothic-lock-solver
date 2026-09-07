@@ -1,84 +1,56 @@
-# Reproducible benchmarks
+# Benchmarks
 
-`tests/benchmarks/fixtures.json` contains 45 fixed numerical inputs and expected
-mathematical minima. These are regression cases, not a random sample of all locks.
-Independent unit-step replay checks legal completion, nonmutation and deterministic
-commands. Only the candidate and our own actual baseline are compared.
-
-## Run
-
-Prepare a separate checkout of this repository's reference branch:
+The catalog contains 45 fixed numerical locks. Every run independently replays
+solutions, verifies the known minimum action counts, and measures the built module.
 
 ```sh
-git worktree add --detach ../gothic-lock-solver-base feat/matrix-astar-benchmarks
 pnpm build
-pnpm benchmark \
-  --baseline-module ../gothic-lock-solver-base/src/index.mjs \
-  --baseline-format legacy \
-  --output-dir artifacts/benchmark
+pnpm benchmark
 ```
 
-That legacy module belongs to the separate checkout. For a typed target, build it
-and use `dist/gothic-lock-solver.mjs` with `--baseline-format tuple`. The command
-generates a snapshot by executing the exact baseline, then compares both modules.
-`pnpm benchmark:compare` also accepts `--baseline-snapshot PATH` for a verified
-release snapshot. Fixture and baseline identities must match.
+Output is `artifacts/benchmark/benchmark.json` and `benchmark.md`. These files are
+CI artifacts, never committed. JSON contains each solution, raw timings, memory
+samples, environment information, source SHA and module/catalog hashes.
 
-Defaults: two warmups, seven timing repetitions and five whole-workload memory
-repetitions. Set `--warmups`, `--repetitions`, `--memory-repetitions` explicitly
-when needed. `--smoke` labels a subset; `--skip-memory` records unavailable memory.
-Neither establishes full release readiness. Unknown/duplicate flags fail.
+## Optional comparison with a saved report
 
-## Metrics and gates
+```sh
+pnpm benchmark --baseline-report /path/to/benchmark.json --baseline-sha TARGET_SHA
+```
+
+CI obtains `TARGET_SHA` from the PR target commit or the previous main commit.
+It looks for that exact commit's successful CI report artifact. If the artifact
+is absent or expired, the current benchmark still runs and explicitly records
+`comparison: skipped`. CI does not check out the target, rebuild it, execute its
+code or substitute an npm/GitHub release. API access failures and malformed reports
+are errors, not missing baselines.
+
+A supplied report must match its claimed SHA, current schema and fixed catalog.
+Its commands are replayed and its recorded deterministic metrics checked before
+comparison. Artifacts include the CI attempt in their names so reruns do not
+silently replace an earlier report.
+
+## Metrics and limits
 
 | Metric | Meaning |
 | --- | --- |
-| A | Grouped commands; must equal the mathematical minimum |
-| U | Distinct selected plates |
-| C | Sum of absolute command displacements |
-| Switches | Changes of selected plate between adjacent commands |
+| Actions | Number of grouped commands; one command can shift several positions |
+| Distinct plates | Number of different directly selected plates per lock |
+| Unit shifts | Sum of absolute command displacements |
+| Switches | Changes between consecutive selected plates |
+| Median / p95 | Solver-call latency, excluding input cloning and replay |
+| Peak RSS | Whole-catalog Node process memory, including runtime and imported module |
 
-Only A is the optimization objective. This change also preserves U/C/switches
-against the actual baseline. Improvement in one metric cannot conceal loss in
-another. Candidate results cannot supply their own expected baseline.
+When a baseline exists, deterministic quality is compared per lock. The current
+policy reports a regression if any action, distinct-plate, unit-shift or switch
+count increases. Aggregate improvements do not hide a per-lock increase.
 
-Only the synchronous public call is timed. Cloning, normalization, replay and
-reporting are outside the timer; public validation/config handling are inside.
-Matched rounds alternate implementation order; baseline-versus-itself samples
-calibrate noise. The screen uses paired log ratios and a conservative standard-error
-envelope with at least five observations, not an exact distribution-free confidence
-interval. A control envelope above 25% cannot certify a pass.
+Saved timings and RSS come from different runs. Ratios are informative observations;
+different hosts, runtimes, loads and measurement noise prevent treating them as a
+paired performance experiment. They do not produce a statistical pass/fail gate.
+RSS is not solver-only allocated memory and does not measure browser heap usage.
 
-- `passed`: the upper slowdown envelope lies within calibrated control noise.
-- `regression`: a slowdown outside the envelope is confirmed in one bounded repeat.
-- `inconclusive`: insufficient precision, noisy controls or conflicting attempts.
-
-A non-pass gets one bounded repeat; both attempts remain visible. Never rerun
-until a preferred verdict appears. Confirmed performance or quality regressions
-fail the command; uncertainty is retained for explicit release review. A sum of
-per-lock medians is not a measured whole-workload latency or universal promise.
-
-## Memory
-
-Fresh Linux workers measure `/proc/self/status` VmHWM in bytes. Raw Node maxRSS,
-startup and loaded RSS remain diagnostics: maxRSS can retain a launcher's pre-exec
-peak. Per-lock observations are descriptive; repeated whole-workload workers
-supply the matched comparison. Values include Node, loading, replay and harness
-costs; they are not exact solver allocation. Kernel RSS accounting is approximate.
-
-Other-platform fallbacks cannot establish a pass without equivalent semantics
-being verified. Portable exact browser peak memory is unavailable; Node RSS is
-not browser heap. See [Linux proc](https://docs.kernel.org/filesystems/proc.html)
-and [Node resource usage](https://nodejs.org/api/process.html#processresourceusage).
-
-## Storage
-
-Each run creates fresh ignored output: baseline snapshot, full JSON/Markdown,
-raw samples and versioned `benchmark-evidence.json` with a generated quality
-snapshot. Reports include environment, source/module/fixture hashes, bundle sizes
-and paths. Existing evidence is never silently overwritten.
-
-GitHub Actions stores these as artifacts. PR CI uses the actual target SHA in a
-separate checkout; releases verify preceding-release bytes/snapshot. The first
-release explicitly uses our preserved reference. GitHub Releases retain evidence
-with the checked package. No snapshots or run reports are committed to Git.
+Defaults are two warmups, seven measured solves per lock and three fresh Node
+process memory samples. `--warmups`, `--repetitions`, `--memory-repetitions` and
+`--output-dir` allow local investigation. Run measurements after other heavy tasks
+finish. Keep raw observations and environment details with any performance claim.

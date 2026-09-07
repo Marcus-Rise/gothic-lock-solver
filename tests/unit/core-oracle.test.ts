@@ -6,7 +6,7 @@ import { PreparedSearch } from '../../src/lock.ts';
 import { SearchBudget } from '../../src/config.ts';
 import { createSolverConfig } from '../../src/index.ts';
 import { BfsSearch } from '../../src/bfs.ts';
-import { referenceActions, replay } from './oracle.ts';
+import { commandCost, referenceCost, replay } from './oracle.ts';
 import fixtures from '../benchmarks/fixtures.json' with { type: 'json' };
 
 function position(value: number): Position {
@@ -18,15 +18,20 @@ function link(value: number): Link {
   throw new Error('Invalid fixture link');
 }
 
-describe('independent minimum-action oracle', () => {
+describe('independent minimum-action then minimum-unit-shift oracle', () => {
   it('checks all 441 two-plate cases and replays every intermediate unit move', () => {
     let checked = 0;
     for (const a of [-1, 0, 1] as const) for (const b of [-1, 0, 1] as const) {
       for (let first = 1; first <= 7; first += 1) for (let second = 1; second <= 7; second += 1) {
         const lock = { state: [position(first), position(second)] as const, links: [[0, a], [b, 0]] as const };
-        const result = solveLock(lock.state, lock.links);
-        expect(result?.length ?? null, JSON.stringify(lock)).toBe(referenceActions(lock));
-        if (result !== null) expect(replay(lock, result)).toEqual([4, 4]);
+        const prepared = new PreparedSearch(new LockModel(lock.state, lock.links));
+        const expected = referenceCost(lock);
+        const results = [solveLock(lock.state, lock.links), new BfsSearch(prepared, new SearchBudget()).solve(),
+          new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxDenseBytes: 0 }))).solve()];
+        for (const result of results) {
+          expect(commandCost(result), JSON.stringify(lock)).toEqual(expected);
+          if (result !== null) expect(replay(lock, result)).toEqual([4, 4]);
+        }
         checked += 1;
       }
     }
@@ -42,12 +47,12 @@ describe('independent minimum-action oracle', () => {
       const state = Array.from({ length: 3 }, () => position(1 + random(7)));
       const links = Array.from({ length: 3 }, (_, row) => Array.from({ length: 3 }, (_, column) => row === column ? 0 : link(random(3) - 1)));
       const lock = { state, links };
-      const expected = referenceActions(lock);
+      const expected = referenceCost(lock);
       const prepared = new PreparedSearch(new LockModel(state, links));
       const results = [solveLock(state, links), new BfsSearch(prepared, new SearchBudget()).solve(),
         new BfsSearch(prepared, new SearchBudget(createSolverConfig({ maxDenseBytes: 0 }))).solve()];
       for (const result of results) {
-        expect(result?.length ?? null, JSON.stringify(lock)).toBe(expected);
+        expect(commandCost(result), JSON.stringify(lock)).toEqual(expected);
         if (result !== null) expect(replay(lock, result)).toEqual([4, 4, 4]);
       }
     }
@@ -55,6 +60,19 @@ describe('independent minimum-action oracle', () => {
 });
 
 describe('fixed mathematical expectations', () => {
+  it.each([
+    { id: 'lock-011', actions: 9, unitShifts: 37 },
+    { id: 'lock-018', actions: 14, unitShifts: 45 },
+    { id: 'lock-019', actions: 14, unitShifts: 41 },
+  ])('$id: minimizes unit shifts among minimum-action solutions', ({ id, actions, unitShifts }) => {
+    const entry = fixtures.find((fixture) => fixture.id === id);
+    if (entry === undefined) throw new Error('Missing regression fixture');
+    const lock = { state: entry.state.map(position), links: entry.links.map((row) => row.map(link)) };
+    const result = solveLock(lock.state, lock.links);
+    expect(commandCost(result)).toEqual({ actions, unitShifts });
+    if (result === null) throw new Error('Expected catalog solution');
+    expect(replay(lock, result)).toEqual(lock.state.map(() => 4));
+  });
   it('keeps all 45 numerical configurations and action minima', async () => {
     const semantics = fixtures.map(({ id, state, links, expectedActions }) => ({ id, state, links, expectedActions }));
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(semantics)));

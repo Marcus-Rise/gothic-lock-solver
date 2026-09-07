@@ -1,259 +1,46 @@
-name: CI
+name: Release
 
 on:
-  pull_request:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
-      kind:
-        description: Stable main release or an owner-branch canary
-        type: choice
-        options: [canary, stable]
-        default: canary
-        required: true
-      source_branch:
-        description: Owner branch for a canary; stable always uses main
+      ci_run_id:
+        description: Successful main-push CI run containing the tested package
         type: string
-        default: main
+        required: true
+      version:
+        description: Stable SemVer to publish, for example 1.0.0
+        type: string
         required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  RELEASE_KIND: ${{ github.event_name == 'workflow_dispatch' && inputs.kind || 'stable' }}
-  PERFORMANCE_ACCEPTED_EVIDENCE_SHA256: ${{ vars.PERFORMANCE_ACCEPTED_EVIDENCE_SHA256 }}
-  PERFORMANCE_ACCEPTANCE_REASON: ${{ vars.PERFORMANCE_ACCEPTANCE_REASON }}
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  verification:
-    name: Tests, package and 45-lock benchmark
-    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+  publish:
+    if: >-
+      github.ref == 'refs/heads/main' && vars.NPM_PUBLICATION_READY == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: candidate
-    outputs:
-      source-sha: ${{ steps.source.outputs.sha }}
-      source-ref: ${{ steps.source.outputs.ref }}
-      artifact: verification-${{ github.run_id }}-${{ github.run_attempt }}
-      benchmark-directory: ${{ steps.report.outputs.directory }}
-    steps:
-      - name: Check out the candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || (github.event_name == 'workflow_dispatch' && inputs.kind == 'canary' && format('refs/heads/{0}', inputs.source_branch)) || github.sha }}
-          path: candidate
-          persist-credentials: false
-      - name: Check out main helpers for release baselines and canary versioning
-        if: github.event_name != 'pull_request'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: workflow
-          persist-credentials: false
-      - name: Record the source before running candidate code
-        id: source
-        env:
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.kind == 'canary' && format('refs/heads/{0}', inputs.source_branch) || 'refs/heads/main' }}
-        run: |
-          git check-ref-format "$SOURCE_REF"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.23.2
-      - name: Record Node 22
-        id: node22
-        run: echo "path=$(command -v node)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 26.8.1
-      - name: Record Node 26
-        id: node26
-        run: echo "path=$(command -v node)" >> "$GITHUB_OUTPUT"
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 12.3.4
-          package_json_file: candidate/package.json
-          run_install: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.19.0
-          cache: pnpm
-          cache-dependency-path: candidate/pnpm-lock.yaml
-      - name: Install tools and browsers
-        run: |
-          npm install --global --ignore-scripts npm@12.0.2
-          pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium firefox webkit
-      - name: Assign a canary version before building
-        if: env.RELEASE_KIND == 'canary'
-        env:
-          RELEASE_SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: node ../workflow/.github/scripts/release.ts canary-version
-      - name: Check source, five bundles and one installed archive
-        env:
-          NODE22: ${{ steps.node22.outputs.path }}
-          NODE26: ${{ steps.node26.outputs.path }}
-        run: |
-          pnpm check
-          pnpm test:coverage
-          "$NODE26" node_modules/vitest/vitest.mjs run --project node
-          pnpm build
-          pnpm test:distribution
-          pnpm test:browser
-          pnpm test:e2e
-          pnpm verify:package --node "$NODE22" --node "$NODE26"
-      - name: Resolve the preceding stable release
-        if: github.event_name != 'pull_request'
-        id: previous
-        run: |
-          version=$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")
-          node ../workflow/.github/scripts/ci-baseline.ts release "$version" artifacts/baseline
-      - name: Check out the PR target or first-release reference
-        if: github.event_name == 'pull_request' || steps.previous.outputs.available != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha || '3cbbeedbb409a2d8ffa5b00c778cfcb0b07c0ec6' }}
-          path: baseline
-          persist-credentials: false
-      - name: Build and measure the separately checked-out baseline
-        if: github.event_name == 'pull_request' || steps.previous.outputs.available != 'true'
-        id: baseline
-        run: |
-          if [ ! -f ../baseline/src/index.mjs ]; then
-            pnpm --dir ../baseline install --frozen-lockfile
-            pnpm --dir ../baseline build
-          fi
-          node .github/scripts/ci-baseline.ts checkout ../baseline artifacts/baseline
-      - name: Compare all 45 locks after other checks have finished
-        id: comparison
-        # Releases retain failed measurements for explicit evidence acceptance.
-        # The trusted publication job always enforces quality and performance gates.
-        continue-on-error: ${{ github.event_name != 'pull_request' }}
-        env:
-          BASELINE_MODULE: ${{ steps.previous.outputs.module || steps.baseline.outputs.module }}
-          BASELINE_SNAPSHOT: ${{ steps.previous.outputs.snapshot || steps.baseline.outputs.snapshot }}
-          BASELINE_FORMAT: ${{ steps.previous.outputs.format || steps.baseline.outputs.format }}
-        run: >-
-          pnpm benchmark:compare
-          --candidate-module dist/gothic-lock-solver.mjs
-          --baseline-module "$BASELINE_MODULE"
-          --baseline-snapshot "$BASELINE_SNAPSHOT"
-          --baseline-format "$BASELINE_FORMAT"
-          --output-dir artifacts/benchmark
-      - name: Record the complete benchmark and show its verdict
-        if: always() && steps.comparison.outcome != 'skipped'
-        id: report
-        run: |
-          reports=(artifacts/benchmark/run-*)
-          test "${#reports[@]}" -eq 1
-          test -f "${reports[0]}/benchmark-evidence.json"
-          echo "directory=${reports[0]}" >> "$GITHUB_OUTPUT"
-          cat "${reports[0]}/benchmark.md" >> "$GITHUB_STEP_SUMMARY"
-          sha256sum "${reports[0]}/benchmark-evidence.json" >> "$GITHUB_STEP_SUMMARY"
-      - name: Preserve the tested archive, baseline and reports
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            candidate/package.json
-            candidate/README.md
-            candidate/LICENSE
-            candidate/dist/
-            candidate/artifacts/
-          if-no-files-found: warn
-          retention-days: 30
-
-  npm-delivery:
-    name: Publish npm and verify browser delivery
-    needs: verification
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.NPM_PUBLICATION_READY == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     environment: npm-production
     permissions:
-      contents: read
-      id-token: write
-    defaults:
-      run:
-        working-directory: candidate
-    outputs:
-      artifact: delivery-${{ github.run_id }}-${{ github.run_attempt }}
-    env:
-      NPM_PUBLICATION_READY: ${{ vars.NPM_PUBLICATION_READY }}
-      RELEASE_SOURCE_SHA: ${{ needs.verification.outputs.source-sha }}
-      RELEASE_SOURCE_REF: ${{ needs.verification.outputs.source-ref }}
-      RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
-    steps:
-      - name: Check out trusted main publication code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: workflow
-          persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 12.3.4
-          package_json_file: workflow/package.json
-          run_install: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.19.0
-          cache: pnpm
-          cache-dependency-path: workflow/pnpm-lock.yaml
-      - name: Install only trusted tooling
-        working-directory: workflow
-        run: |
-          npm install --global --ignore-scripts npm@12.0.2
-          pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium firefox webkit
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.verification.outputs.artifact }}
-          path: candidate
-      - name: Validate saved inputs using trusted main code
-        env:
-          BENCHMARK_DIRECTORY: ${{ needs.verification.outputs.benchmark-directory }}
-        run: >-
-          node ../workflow/.github/scripts/release.ts prepare
-          --benchmark-dir "$BENCHMARK_DIRECTORY"
-          --source-sha "$RELEASE_SOURCE_SHA"
-      - name: Publish or resume the exact tested npm archive
-        run: node ../workflow/.github/scripts/release.ts publish
-      - name: Verify npm bytes, CDN headers and actual browser imports
-        run: node ../workflow/.github/scripts/release.ts verify
-      - name: Preserve prepared assets for completion or recovery
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: delivery-${{ github.run_id }}-${{ github.run_attempt }}
-          path: candidate/artifacts/release/
-          if-no-files-found: warn
-          retention-days: 30
-
-  github-release:
-    name: Complete GitHub release with verified assets
-    needs: [verification, npm-delivery]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
+      actions: read
       contents: write
+      id-token: write
     env:
+      GH_TOKEN: ${{ github.token }}
       NPM_PUBLICATION_READY: ${{ vars.NPM_PUBLICATION_READY }}
-      RELEASE_SOURCE_SHA: ${{ needs.verification.outputs.source-sha }}
-      RELEASE_SOURCE_REF: ${{ needs.verification.outputs.source-ref }}
-      RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Check out trusted main release code
+      - name: Check out trusted main release tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -261,27 +48,45 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.19.0
-      - name: Install the exact official GitHub CLI release
+          registry-url: https://registry.npmjs.org
+      - name: Install official publication CLIs
         env:
           GH_ARCHIVE_SHA256: e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
         run: |
+          npm install --global --ignore-scripts npm@12.0.2
           curl --fail --location --proto '=https' --tlsv1.2 https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/gh.tar.gz"
           echo "$GH_ARCHIVE_SHA256  $RUNNER_TEMP/gh.tar.gz" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/gh.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gh_2.100.0_linux_amd64/bin" >> "$GITHUB_PATH"
+      - name: Select the successful main CI build
+        id: build
+        env:
+          REQUESTED_RUN: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
+        run: node .github/scripts/artifact.ts release "$REQUESTED_RUN"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.npm-delivery.outputs.artifact }}
-          path: artifacts/release
-      - name: Resume missing draft assets or finalize the verified release
+          artifact-ids: ${{ steps.build.outputs.artifact-id }}
+          run-id: ${{ steps.build.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/build
+      - name: Prepare release metadata without rebuilding runtime files
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/release.ts github
-      - name: Preserve the final delivery status
+          RELEASE_SOURCE_SHA: ${{ steps.build.outputs.source-sha }}
+          CI_RUN_ID: ${{ steps.build.outputs.run-id }}
+          CI_RUN_ATTEMPT: ${{ steps.build.outputs.run-attempt }}
+          STABLE_VERSION: ${{ inputs.version }}
+        run: |
+          args=(--input "$RUNNER_TEMP/build" --output "$RUNNER_TEMP/release")
+          if [ -n "$STABLE_VERSION" ]; then args+=(--version "$STABLE_VERSION"); fi
+          node .github/scripts/release.ts prepare "${args[@]}"
+          cat "$RUNNER_TEMP/release/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish npm, verify CDN and create GitHub Release
+        env:
+          RELEASE_SOURCE_SHA: ${{ steps.build.outputs.source-sha }}
+        run: node .github/scripts/release.ts publish --directory "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: github-status-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/release/delivery-status.json
-          if-no-files-found: warn
-          retention-days: 30
+          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release/
+          retention-days: 90

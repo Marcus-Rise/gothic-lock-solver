@@ -1,172 +1,165 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { releaseAssets, sha256, validateManifest } from '../../.github/scripts/release-lib.ts';
-import { completeGithubRelease, publishOrResumeNpm, registryMetadata, verifyCdn, verifyRegistry } from '../../.github/scripts/release-network.ts';
+import { publishNpm, publishGithub, verifyCdn, registryMetadata, sha256, runtimeFiles, type ReleaseManifest } from '../../.github/scripts/release.ts';
 
 const command = vi.hoisted(() => vi.fn<(file: string, args: readonly string[]) => string>());
 vi.mock('node:child_process', () => ({ execFileSync: command }));
 const fetchMock = vi.fn<typeof fetch>();
-const archive = Buffer.from('exact prepared archive');
-const assetBytes = (filename: string): Buffer => filename === 'package.tgz' ? archive : Buffer.from(`prepared ${filename}`);
-const manifest = validateManifest({ schemaVersion: 1, name: 'gothic-lock-solver', version: '1.0.0', sourceSha: 'a'.repeat(40), kind: 'stable',
-  tarballSha256: sha256(archive), assets: Object.fromEntries(releaseAssets.map(filename => [filename, sha256(assetBytes(filename))])) });
-const metadata = { name: manifest.name, version: manifest.version, dist: { tarball: 'https://registry.npmjs.org/gothic-lock-solver/-/gothic-lock-solver-1.0.0.tgz' } };
-const jsonResponse = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-
+const archive = 'exact prepared archive';
+const manifest: ReleaseManifest = { schemaVersion: 1, version: '1.2.3', sourceSha: 'a'.repeat(40), kind: 'stable',
+  assets: { 'package.tgz': sha256(archive), ...Object.fromEntries(runtimeFiles.map(name => [name, sha256(name)])) } };
+const metadata = { name: 'gothic-lock-solver', version: manifest.version, dist: { tarball: 'https://registry.npmjs.org/gothic-lock-solver/-/gothic-lock-solver-1.2.3.tgz' } };
+const response = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 beforeEach(() => { command.mockReset(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-async function releaseDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'gothic-network-test-'));
-  for (const filename of releaseAssets) await writeFile(join(directory, filename), assetBytes(filename));
-  await writeFile(join(directory, 'release-manifest.json'), JSON.stringify(manifest));
-  await writeFile(join(directory, 'release-notes.md'), 'Prepared release notes');
-  return directory;
-}
-
-describe('npm and CDN delivery boundaries', () => {
-  it('distinguishes an absent version from a registry outage', async () => {
+describe('immutable npm and public CDN delivery', () => {
+  it('distinguishes a missing npm version from a registry outage', async () => {
     fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }));
-    expect(await registryMetadata('1.0.0')).toBeNull();
+    expect(await registryMetadata('1.2.3')).toBeNull();
     fetchMock.mockResolvedValueOnce(new Response('', { status: 503 }));
-    await expect(registryMetadata('1.0.0')).rejects.toThrow(/503/);
+    await expect(registryMetadata('1.2.3')).rejects.toThrow(/503/);
   });
-
-  it('verifies an existing archive and rejects different bytes at the same version', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(metadata)).mockResolvedValueOnce(new Response(archive));
-    await expect(verifyRegistry(manifest)).resolves.toBeUndefined();
-    fetchMock.mockResolvedValueOnce(jsonResponse(metadata)).mockResolvedValueOnce(new Response('different archive'));
-    await expect(verifyRegistry(manifest)).rejects.toThrow(/identity/);
+  it('publishes the prepared archive with the chosen dist-tag and verifies registry bytes', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 404 })).mockResolvedValueOnce(response(metadata)).mockResolvedValueOnce(new Response(archive));
+    await publishNpm('/prepared', manifest);
+    expect(command).toHaveBeenCalledWith('npm', ['publish', '/prepared/package.tgz', '--access', 'public', '--tag', 'latest', '--ignore-scripts', '--registry', 'https://registry.npmjs.org/'], expect.objectContaining({ stdio: 'inherit' }));
   });
-
-  it('publishes the one prepared archive only when the npm version is absent', async () => {
-    const directory = await releaseDirectory();
-    try {
-      fetchMock.mockResolvedValue(new Response('', { status: 404 }));
-      await publishOrResumeNpm(directory, manifest);
-      expect(command).toHaveBeenCalledWith('npm', ['publish', join(directory, 'package.tgz'), '--access', 'public', '--tag', 'latest', '--provenance', '--ignore-scripts', '--registry', 'https://registry.npmjs.org/'], expect.objectContaining({ stdio: 'inherit' }));
-    } finally { await rm(directory, { recursive: true, force: true }); }
+  it('resumes an identical npm version without overwriting it', async () => {
+    fetchMock.mockResolvedValueOnce(response(metadata)).mockResolvedValueOnce(new Response(archive));
+    await publishNpm('/prepared', manifest);
+    expect(command).not.toHaveBeenCalled();
   });
-
-  it('resumes identical npm bytes without republishing and refuses different existing bytes', async () => {
-    const directory = await releaseDirectory();
-    try {
-      fetchMock.mockResolvedValueOnce(jsonResponse(metadata)).mockResolvedValueOnce(jsonResponse(metadata)).mockResolvedValueOnce(new Response(archive));
-      await publishOrResumeNpm(directory, manifest);
-      expect(command).not.toHaveBeenCalled();
-      fetchMock.mockResolvedValueOnce(jsonResponse(metadata)).mockResolvedValueOnce(jsonResponse(metadata)).mockResolvedValueOnce(new Response('changed'));
-      await expect(publishOrResumeNpm(directory, manifest)).rejects.toThrow(/identity/);
-      expect(command).not.toHaveBeenCalled();
-    } finally { await rm(directory, { recursive: true, force: true }); }
+  it('refuses different bytes under an existing npm version', async () => {
+    fetchMock.mockResolvedValueOnce(response(metadata)).mockResolvedValueOnce(new Response('changed'));
+    await expect(publishNpm('/prepared', manifest)).rejects.toThrow(/identity/i);
+    expect(command).not.toHaveBeenCalled();
   });
-
+  it('checks all five public CDN files against the tested bytes and browser delivery headers', async () => {
+    fetchMock.mockImplementation(async input => {
+      const filename = String(input).split('/').at(-1) ?? '';
+      return new Response(filename, { headers: { 'content-type': 'application/javascript', 'access-control-allow-origin': '*' } });
+    });
+    await verifyCdn(manifest);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
   it.each([
-    { name: 'MIME type', type: 'text/plain', cors: '*', bytes: assetBytes('gothic-lock-solver.mjs'), error: /headers/ },
-    { name: 'CORS', type: 'application/javascript', cors: 'https://elsewhere.test', bytes: assetBytes('gothic-lock-solver.mjs'), error: /headers/ },
-    { name: 'runtime hash', type: 'application/javascript', cors: '*', bytes: Buffer.from('changed'), error: /identity/ },
-  ])('rejects an invalid CDN $name', async ({ type, cors, bytes, error }) => {
-    fetchMock.mockResolvedValue(new Response(bytes.toString('utf8'), { headers: { 'Content-Type': type, 'Access-Control-Allow-Origin': cors } }));
-    await expect(verifyCdn(manifest)).rejects.toThrow(error);
+    { type: 'text/plain', cors: '*', bytes: 'gothic-lock-solver.mjs', error: /headers/ },
+    { type: 'application/javascript', cors: 'https://elsewhere.test', bytes: 'gothic-lock-solver.mjs', error: /headers/ },
+    { type: 'application/javascript', cors: '*', bytes: 'changed', error: /identity/ },
+  ])('refuses bad CDN headers or bytes: $type/$cors/$bytes', async value => {
+    fetchMock.mockResolvedValue(new Response(value.bytes, { headers: { 'content-type': value.type, 'access-control-allow-origin': value.cors } }));
+    await expect(verifyCdn(manifest)).rejects.toThrow(value.error);
   });
 });
 
-function mockGithub(directory: string, options: { draft: boolean; missing?: string; tagSha?: string; newer?: boolean; onSecondPage?: boolean; corruptAsset?: string }): void {
-  const tag = `v${manifest.version}`;
-  const filenames = [...releaseAssets, 'release-manifest.json'];
-  const release = { tag_name: tag, draft: options.draft, prerelease: false, assets: filenames.filter(name => name !== options.missing).map(name => ({ name })) };
-  command.mockImplementation((file, args) => {
-    if (file !== 'gh') throw new Error('Unexpected executable');
-    if (args[0] === 'api') {
-      const endpoint = args[1] ?? '';
-      if (endpoint.includes('matching-refs')) return JSON.stringify([{ ref: `refs/tags/${tag}` }]);
-      if (endpoint.includes('/commits/refs/tags/')) return JSON.stringify({ sha: options.tagSha ?? manifest.sourceSha });
-      if (endpoint.includes('releases?')) {
-        const firstPage = options.onSecondPage ? Array.from({ length: 100 }, (_, index) => ({ tag_name: `v2.0.0-canary.${index}`, draft: false, prerelease: true })) : [release];
-        const pages = [firstPage, ...(options.onSecondPage ? [[release]] : []), ...(options.newer ? [[{ tag_name: 'v1.1.0', draft: false, prerelease: false }]] : [])];
-        return JSON.stringify(args.includes('--paginate') && args.includes('--slurp') ? pages : firstPage);
-      }
-      if (endpoint.includes('/releases/tags/')) return JSON.stringify(release);
-    }
-    if (args[0] === 'release' && args[1] === 'download') {
-      const destination = args[args.indexOf('--dir') + 1];
-      if (!destination) throw new Error('Missing download directory');
-      for (const [index, argument] of args.entries()) {
-        if (argument !== '--pattern') continue;
-        const filename = args[index + 1];
-        if (!filename) throw new Error('Missing asset pattern');
-        const bytes = options.corruptAsset === filename ? Buffer.from('changed asset') : readFileSync(join(directory, filename));
-        writeFileSync(join(destination, filename), bytes);
-      }
-      return '';
-    }
-    if (args[0] === 'release' && ['upload', 'edit'].includes(args[1] ?? '')) return '';
-    throw new Error(`Unexpected gh call: ${args.join(' ')}`);
-  });
-  fetchMock.mockResolvedValue(jsonResponse({ ...metadata, version: options.newer ? '1.1.0' : '1.0.0' }));
-}
-
-describe('GitHub partial-release recovery', () => {
-  it('rejects changed downloaded assets before publishing the draft', async () => {
-    const directory = await releaseDirectory();
+describe('GitHub release identity', () => {
+  it.each(['canary', 'stable'] as const)('attaches the verified assets and changes latest only for %s', async kind => {
+    const directory = await mkdtemp(join(tmpdir(), 'gothic-github-'));
     try {
-      mockGithub(directory, { draft: true, corruptAsset: 'benchmark-evidence.json' });
-      await expect(completeGithubRelease(directory, manifest, 'owner/repo')).rejects.toThrow(/identity/);
-      expect(command.mock.calls.some(([, args]) => args[1] === 'edit')).toBe(false);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects an existing tag at a different commit before uploading or finalizing', async () => {
-    const directory = await releaseDirectory();
-    try {
-      mockGithub(directory, { draft: true, tagSha: 'b'.repeat(40) });
-      await expect(completeGithubRelease(directory, manifest, 'owner/repo')).rejects.toThrow(/tag/);
-      expect(command.mock.calls.some(([, args]) => args[0] === 'release')).toBe(false);
+      vi.stubEnv('GH_TOKEN', 'unit-test-token');
+      const chosen = { ...manifest, kind };
+      const bytes = JSON.stringify(chosen);
+      await writeFile(join(directory, 'release-manifest.json'), bytes);
+      const assets = { ...chosen.assets, 'release-manifest.json': sha256(bytes) };
+      const release = { draft: false, prerelease: kind === 'canary', assets: Object.entries(assets).map(([name, hash]) => ({ name, digest: `sha256:${hash}` })) };
+      let created = false;
+      fetchMock.mockImplementation(async input => {
+        if (String(input).includes('/commits/')) return response({ sha: chosen.sourceSha });
+        return created ? response(release) : new Response('', { status: 404 });
+      });
+      command.mockImplementation((file, args) => {
+        expect(file).toBe('gh');
+        if (args[0] === 'api' && args[1] === 'graphql') {
+          expect(args).toContain('owner=owner');
+          expect(args).toContain('name=repo');
+          expect(args).toContain('tag=v1.2.3');
+          return JSON.stringify(created ? 42 : null);
+        }
+        expect(args).toContain('--verify-tag');
+        expect(args).toContain(`--latest=${kind === 'stable'}`);
+        expect(args.includes('--prerelease')).toBe(kind === 'canary');
+        for (const name of Object.keys(assets)) expect(args).toContain(join(directory, name));
+        created = true;
+        return '';
+      });
+      await publishGithub(directory, chosen, 'owner/repo');
+      expect(created).toBe(true);
+      command.mockClear();
+      await publishGithub(directory, chosen, 'owner/repo');
+      expect(command.mock.calls.every(([, args]) => args[0] === 'api' && args[1] === 'graphql')).toBe(true);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
-  it('uploads only missing draft assets and verifies downloads before finalizing', async () => {
-    const directory = await releaseDirectory();
+  it('refuses an existing tag for another source before creating a release', async () => {
+    vi.stubEnv('GH_TOKEN', 'unit-test-token');
+    fetchMock.mockImplementation(async input => String(input).includes('/commits/') ? response({ sha: 'b'.repeat(40) }) : new Response('', { status: 404 }));
+    await expect(publishGithub('/prepared', manifest, 'owner/repo')).rejects.toThrow(/source/i);
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it.each(['canary', 'stable'] as const)('finishes a matching partial %s draft without overwriting uploaded assets', async kind => {
+    const directory = await mkdtemp(join(tmpdir(), 'gothic-draft-'));
     try {
-      mockGithub(directory, { draft: true, missing: 'benchmark-evidence.json' });
-      await completeGithubRelease(directory, manifest, 'owner/repo');
-      const uploads = command.mock.calls.filter(([, args]) => args[1] === 'upload');
-      expect(uploads).toHaveLength(1);
-      expect(uploads[0]?.[1]).toContain(join(directory, 'benchmark-evidence.json'));
-      expect(command.mock.calls.some(([, args]) => args.includes('--clobber'))).toBe(false);
-      expect(command.mock.calls.at(-1)?.[1]).toEqual(['release', 'edit', 'v1.0.0', '--repo', 'owner/repo', '--draft=false', '--latest=true']);
+      vi.stubEnv('GH_TOKEN', 'unit-test-token');
+      const chosen = { ...manifest, kind };
+      const bytes = JSON.stringify(chosen);
+      await writeFile(join(directory, 'release-manifest.json'), bytes);
+      const hashes = { ...chosen.assets, 'release-manifest.json': sha256(bytes) };
+      const complete = Object.entries(hashes).map(([name, hash]) => ({ name, digest: `sha256:${hash}` }));
+      const missing = 'gothic-lock-solver.js';
+      const release = { draft: true, prerelease: kind === 'canary', assets: complete.filter(asset => asset.name !== missing) };
+      fetchMock.mockImplementation(async input => {
+        const url = String(input);
+        if (url.includes('/commits/')) return response({ sha: chosen.sourceSha });
+        // The tag endpoint exposes published releases; drafts are read by ID.
+        if (url.includes('/releases/tags/')) return new Response('', { status: 404 });
+        expect(url).toBe('https://api.github.com/repos/owner/repo/releases/42');
+        return response(release);
+      });
+      command.mockImplementation((file, args) => {
+        expect(file).toBe('gh');
+        if (args[0] === 'api' && args[1] === 'graphql') return '42';
+        if (args[1] === 'upload') {
+          expect(args).toEqual(['release', 'upload', 'v1.2.3', join(directory, missing), '--repo', 'owner/repo']);
+          release.assets = complete;
+          return '';
+        }
+        expect(args).toEqual(['release', 'edit', 'v1.2.3', '--repo', 'owner/repo', '--draft=false', `--latest=${kind === 'stable'}`]);
+        expect(release.assets).toEqual(complete);
+        release.draft = false;
+        return '';
+      });
+      await publishGithub(directory, chosen, 'owner/repo');
+      expect(release.draft).toBe(false);
+      expect(release.assets).toEqual(complete);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
-  it('refuses to add missing assets to an already published release', async () => {
-    const directory = await releaseDirectory();
+  it.each(['mismatched digest', 'unexpected name'])('refuses a draft with an %s before any upload or publication', async defect => {
+    const directory = await mkdtemp(join(tmpdir(), 'gothic-draft-'));
     try {
-      mockGithub(directory, { draft: false, missing: 'benchmark-evidence.json' });
-      await expect(completeGithubRelease(directory, manifest, 'owner/repo')).rejects.toThrow(/Published release/);
-      expect(command.mock.calls.some(([, args]) => args[1] === 'upload' || args[1] === 'edit')).toBe(false);
-    } finally { await rm(directory, { recursive: true, force: true }); }
-  });
-
-  it('finishes an older draft while preserving the newer stable latest release', async () => {
-    const directory = await releaseDirectory();
-    try {
-      mockGithub(directory, { draft: true, newer: true });
-      await completeGithubRelease(directory, manifest, 'owner/repo');
-      expect(command.mock.calls.at(-1)?.[1]).toContain('--latest=false');
-    } finally { await rm(directory, { recursive: true, force: true }); }
-  });
-
-  it('resumes an existing release beyond the first 100 entries without duplicate creation', async () => {
-    const directory = await releaseDirectory();
-    try {
-      mockGithub(directory, { draft: true, onSecondPage: true, newer: true });
-      await completeGithubRelease(directory, manifest, 'owner/repo');
-      expect(command.mock.calls.some(([, args]) => args[0] === 'release' && args[1] === 'create')).toBe(false);
-      expect(command.mock.calls.at(-1)?.[1]).toContain('--latest=false');
+      vi.stubEnv('GH_TOKEN', 'unit-test-token');
+      await writeFile(join(directory, 'release-manifest.json'), JSON.stringify(manifest));
+      const asset = defect === 'mismatched digest'
+        ? { name: 'package.tgz', digest: `sha256:${'0'.repeat(64)}` }
+        : { name: 'unexpected.js', digest: `sha256:${sha256('unexpected')}` };
+      const release = { draft: true, prerelease: false, assets: [asset] };
+      fetchMock.mockImplementation(async input => {
+        const url = String(input);
+        if (url.includes('/commits/')) return response({ sha: manifest.sourceSha });
+        if (url.includes('/releases/tags/')) return new Response('', { status: 404 });
+        return response(release);
+      });
+      command.mockImplementation((file, args) => {
+        expect(file).toBe('gh');
+        expect(args.slice(0, 2)).toEqual(['api', 'graphql']);
+        return '42';
+      });
+      await expect(publishGithub(directory, manifest, 'owner/repo')).rejects.toThrow(/identity|Unexpected/);
+      expect(command.mock.calls.every(([, args]) => args[0] === 'api' && args[1] === 'graphql')).toBe(true);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 });

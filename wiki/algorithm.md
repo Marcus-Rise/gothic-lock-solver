@@ -18,8 +18,9 @@ in its entirety.
 | C | Number of unit shifts: sum of absolute command deltas |
 | Switches | Changes of selected plate between adjacent commands |
 
-A successfully returned solution minimizes A. Minimum U or C among equal-A
-solutions is not a general guarantee. An optimal action sequence never has two
+A successfully returned solution minimizes the pair (A, C) lexicographically:
+first grouped actions, then unit shifts among paths with that minimum action count.
+Minimum U is not a general guarantee. An optimal action sequence never has two
 adjacent commands selecting the same plate: movements in the same direction can
 be combined, and opposite movements can be cancelled. The combined displacement
 still lies within the plate's six-position travel range. Thus a nonempty shortest
@@ -67,31 +68,42 @@ Three nonzero balance components do not guarantee a three-action solution.
    consistency without floating-point tolerances. An inconsistent system proves
    unreachability. For a nonsingular matrix, a unique noninteger balance also
    proves that no path exists.
-2. A consistent singular system uses exact BFS over legal grouped actions.
+2. A consistent singular system uses layered BFS over legal grouped actions.
    A particular rational solution cannot exclude other integer solutions.
 3. For a unique integer balance, a sufficient certificate is attempted first.
    If every `abs(z_i) <= 6` and each nonzero component can be executed as a single
-   legal action, the result reaches the lower bound and is globally optimal.
+   legal action, the result reaches both lower bounds: one action per nonzero
+   component and exactly `sum(abs(z_i))` unit shifts. It is globally optimal.
    The first currently legal plate by index is selected. Failure of this greedy
    attempt proves nothing: the complete A* search then starts from the initial state.
-4. A* maintains the residual balance `r = M⁻¹(g−x)` and uses
+4. A* maintains the residual balance `r = M⁻¹(g−x)` and uses two lower bounds:
 
 ```math
-h(x) = \sum_i \left\lceil |r_i|/6 \right\rceil.
+h_A(x) = \sum_i \left\lceil |r_i|/6 \right\rceil,
+\qquad h_C(x) = \sum_i |r_i|.
 ```
 
-One action changes only one residual component, by at most six. That component
-requires at least `ceil(abs(r_i)/6)` actions, so h is admissible. It is also
-consistent: `h(x) <= 1 + h(x')` on every edge. Consequently the first goal removed
-from the priority queue has minimum action count, and closed states need not be
-reopened. An indexed heap decreases priorities in place, without retaining stale
-copies of open nodes.
+One action changes only one residual component by its signed displacement k.
+That component needs at least `ceil(abs(r_i)/6)` actions and `abs(r_i)` unit
+shifts. Both bounds are admissible and consistent on every legal edge:
+`h_A(x) <= 1 + h_A(x')` and `h_C(x) <= abs(k) + h_C(x')`.
 
-BFS also has unit-cost edges and therefore returns the same minimum A. Its
-neighbor order is ascending plate index, positive then negative displacement,
-and larger displacement first. A* has deterministic ordering but may choose a
-different equal-A path. Only one `solveLock` facade is public; callers do not
-select a search implementation.
+A* orders its frontier by `(g_A + h_A, g_C + h_C)`. The first popped goal therefore
+minimizes (A, C), and closed states need not reopen. Revisiting an open state can
+improve either its action count or its unit-shift count at equal action depth;
+changing only the heap tie-breaker would miss the latter improvement. An indexed
+heap decreases priorities in place without retaining stale copies.
+
+BFS processes complete action-depth layers. At equal depth, a state retains the
+predecessor with fewer unit shifts. It completes the whole predecessor layer
+before returning a reached goal, so all minimum-action alternatives contribute.
+Every state is queued and expanded at most once. A one-command goal can return
+immediately: every such path has the same shift magnitude, equal to the largest
+absolute difference between the initial and target positions.
+
+Ordering is deterministic after these costs: ascending plate index and larger
+legal displacement first; A* prefers the remaining displacement's direction.
+Only one `solveLock` facade is public; callers do not select a search algorithm.
 
 ## Complexity
 
@@ -112,6 +124,8 @@ O(N³) rational operations is not O(N³) bit operations: exact arithmetic costs
 increase with numerator/denominator bit length. Search bounds use the usual unit
 cost model for safe JS numbers and expected O(1) Map operations.
 
+The secondary objective can require more exploration than stopping at the first
+minimum-action path. A custom resource budget may therefore need adjustment.
 The matrix heuristic reduces search on the benchmark corpus; the exponential
 worst case remains. There is no universal tens-of-milliseconds guarantee.
 
@@ -142,14 +156,15 @@ WebKit tests exercise the unchanged distributed files and Worker imports.
 ## Evidence and scope
 
 Catalog tests independently replay all 45 paths and verify minimum action counts.
-A separate exhaustive oracle checks all 441 two-plate configurations and 192
-seeded three-plate configurations. Counterexamples cover fractional balances,
+Regression cases also check secondary unit-shift optima. A separate exhaustive
+oracle checks both costs on all 441 two-plate configurations and 192 seeded
+three-plate configurations. Counterexamples cover fractional balances,
 inconsistency, singularity, blocked ordering, boundaries and repeated plate use.
 
 These tests establish implementation behavior on their inputs. The general
-minimum-A guarantee follows from the search proof, not the number of tests.
-The [benchmark harness](benchmarks.md) compares the candidate with its own
-actual target revision or previous release in one runtime, with separate timing
-and process-memory measurements. CI artifacts identify
+minimum-(A, C) guarantee follows from the search proof, not the number of tests.
+The [benchmark harness](benchmarks.md) records current timing and process-memory
+measurements. When available, it compares a saved CI report for the exact target
+SHA; historical timing ratios are observations across runs. CI artifacts identify
 the exact sources, machine and runtime; Node measurements are not measurements
 of a phone or browser.

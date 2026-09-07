@@ -5,8 +5,9 @@ import type { SolverConfig } from './config.ts';
 import type { Command, Links, Position, StateConstraint } from './types.ts';
 
 /**
- * Find a legal sequence with the minimum number of actions, or null when the
- * goal is proved unreachable. Each [index, delta] directly changes the selected
+ * Minimize actions, then total absolute pin displacement among equal-action
+ * solutions; return null when the goal is proved unreachable.
+ * Each [index, delta] directly changes the selected
  * pin's numeric position and applies links[index][target] once without cascades.
  * Inputs are copied and never modified; all goal positions are 4.
  *

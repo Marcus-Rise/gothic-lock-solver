@@ -1,6 +1,7 @@
 # Gothic Lock Solver
 
-An exact minimum-action solver for Gothic 1 Remake coupled plate locks. A
+An exact solver for Gothic 1 Remake coupled plate locks: minimum grouped actions,
+then minimum unit shifts among equally short action sequences. A
 TypeScript library and standalone Node.js CLI share one mathematical core with
 no runtime dependencies. One action can move a plate several positions.
 
@@ -75,8 +76,8 @@ Node/browser consumers and the installed package. Coverage requires 80% each for
 statements, branches, functions and lines; strict types and lint warnings are enforced.
 
 Read [development](wiki/development.md), [benchmarks](wiki/benchmarks.md),
-[releases](wiki/releasing.md) and [AGENTS](AGENTS.md). Generated builds, snapshots,
-reports and coverage are CI artifacts, with release evidence attached to GitHub
+[releases](wiki/releasing.md) and [AGENTS](AGENTS.md). Generated builds,
+reports and coverage are CI artifacts, with the benchmark report attached to GitHub
 Releases. They are not committed to the source repository.
 
 Apache-2.0 — see [LICENSE](LICENSE).

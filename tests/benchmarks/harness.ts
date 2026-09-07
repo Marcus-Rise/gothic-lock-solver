@@ -1,206 +1,487 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
-import { array, commandMetrics, legacyCommands, record, replayCommands, string, tupleCommands, type Definition, type Metrics, type TupleCommand } from './validation.ts';
-import { catalogSha256, jsonFile, loadCatalog, readMetrics, sha256, type Fixture } from './catalog.ts';
-import { validateSource } from './source.ts';
-import { combineVerdicts, compareMetrics, confirmPerformance, performanceVerdict, statistics } from './comparison.ts';
+import {
+  array,
+  commandMetrics,
+  integer,
+  record,
+  replayCommands,
+  string,
+  tupleCommands,
+  type Definition,
+  type Metrics,
+  type TupleCommand,
+} from './validation.ts';
+import { catalogSha256, jsonFile, loadCatalog, readMetrics, type Fixture } from './catalog.ts';
+import {
+  compareMetrics,
+  historicalRatio,
+  statistics,
+  type MetricComparison,
+  type Quality,
+} from './comparison.ts';
+import { parseMemory, type MemoryMeasurement } from './memory.ts';
 
-export type ModuleFormat = 'tuple' | 'legacy';
-export type Implementation = { label: string; solve: (definition: Definition) => unknown;
-  normalize: (raw: unknown) => unknown };
+export type Solver = (definition: Definition) => unknown;
 export type Solution = Metrics & { commands: readonly TupleCommand[] };
-export type Snapshot = { schemaVersion: number; fixtureSha256: string; source: Record<string, unknown>; reason: string;
-  locks: (Solution & { id: string; optimumA: number })[] };
-export type Measurement = Solution & { samplesMs: number[]; timingMs: ReturnType<typeof statistics> };
+export type Measurement = Solution & {
+  id: string;
+  optimumA: number;
+  samplesMs: number[];
+  timingMs: ReturnType<typeof statistics>;
+};
+export type Source = {
+  revision: string;
+  dirty: boolean;
+  moduleSha256: string;
+};
+export type Environment = {
+  node: string;
+  v8: string;
+  platform: string;
+  arch: string;
+  cpu: string;
+  logicalCpus: number;
+  osRelease: string;
+  totalMemoryBytes: number;
+};
+export type Settings = {
+  warmups: number;
+  repetitions: number;
+  memoryRepetitions: number;
+};
+export type ComparedLock = MetricComparison & {
+  id: string;
+  baseline: Metrics;
+  timingMedianRatio: number | null;
+  timingP95Ratio: number | null;
+};
+export type Comparison =
+  | { status: 'skipped'; reason: string }
+  | {
+      status: 'compared';
+      baselineSha: string;
+      quality: Quality;
+      results: ComparedLock[];
+      memoryPeakMedianRatio: number | null;
+      limitations: string;
+    };
+export type BenchmarkReport = {
+  schemaVersion: 2;
+  createdAt: string;
+  source: Source;
+  environment: Environment;
+  settings: Settings;
+  fixtures: { count: 45; catalogSha256: string };
+  quality: Quality;
+  results: Measurement[];
+  totals: Metrics;
+  memory: MemoryMeasurement;
+  comparison: Comparison;
+};
+const historicalLimitations = [
+  'Historical timing and RSS ratios are informational observations.',
+  'Hosts, runtimes, load, sample counts and measurement noise can differ;',
+  'these are not paired performance gates.',
+].join(' ');
 
-export async function loadImplementation(modulePath: string, format: ModuleFormat, label: string): Promise<Implementation> {
+export async function loadImplementation(modulePath: string): Promise<Solver> {
   const module: unknown = await import(pathToFileURL(resolve(modulePath)).href);
-  const exported = record(module, 'solver module')['solveLock'];
-  if (typeof exported !== 'function') throw new Error(`Missing named solveLock export: ${modulePath}`);
-  return { label,
-    solve: (definition) => { const raw: unknown = format === 'tuple' ? exported(definition.state, definition.links) : exported(definition); return raw; },
-    normalize: (raw) => {
-      if (format === 'tuple') return raw;
-      const result = record(raw, 'legacy result');
-      if (result['status'] === 'unsolvable') return null;
-      if (result['status'] !== 'solved') throw new Error('Unexpected legacy solver status.');
-      return legacyCommands(result['commands']);
-    } };
-}
-export function readSnapshot(path: string): Snapshot {
-  const value = record(jsonFile(path), 'snapshot');
-  const source = validateSource(value['source']);
-  if (value['schemaVersion'] !== 1 || value['fixtureSha256'] !== catalogSha256) throw new Error('Snapshot schema or fixture hash mismatch.');
-  const locks = array(value['locks'], 'snapshot locks').map((raw) => {
-    const row = record(raw); const metrics = readMetrics(row); const commands = tupleCommands(row['commands']);
-    assert.deepEqual(commandMetrics(commands), metrics, 'Snapshot metric/path mismatch.');
-    if (typeof row['optimumA'] !== 'number' || !Number.isInteger(row['optimumA'])) throw new Error('Snapshot optimum missing.');
-    return { id: string(row['id']), optimumA: row['optimumA'], ...metrics, commands };
-  });
-  if (locks.length !== 45 || new Set(locks.map((lock) => lock.id)).size !== 45) throw new Error('Snapshot requires 45 unique locks.');
-  for (const fixture of loadCatalog()) {
-    const row = locks.find((lock) => lock.id === fixture.id);
-    if (row === undefined || row.optimumA !== fixture.expectedActions) throw new Error('Snapshot fixture identity or optimum mismatch.');
-    validateSolution(fixture, row.commands);
+  const solveLock = record(module, 'solver module')['solveLock'];
+  if (typeof solveLock !== 'function') {
+    throw new Error(`Missing named solveLock export: ${modulePath}`);
   }
-  return { schemaVersion: 1, fixtureSha256: catalogSha256, source, reason: string(value['reason']), locks };
+  return (definition) => {
+    const result: unknown = solveLock(definition.state, definition.links);
+    return result;
+  };
 }
-export async function writeSnapshot(path: string, snapshot: unknown): Promise<void> {
-  // Deliberately exclusive. Refreshes require a new reviewed destination, never an implicit replacement.
-  await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`, { flag: 'wx' });
-}
+
 export function validateSolution(lock: Fixture, raw: unknown): Solution {
-  if (raw === null) throw new Error(`${lock.id}: lost solvability.`);
+  if (raw === null) {
+    throw new Error(`${lock.id}: lost solvability.`);
+  }
   const commands = tupleCommands(raw);
   assert.deepEqual(replayCommands(lock, commands), lock.state.map(() => 4), `${lock.id}: target not reached.`);
   const metrics = commandMetrics(commands);
   assert.equal(metrics.A, lock.expectedActions, `${lock.id}: wrong exact action minimum.`);
   return { ...metrics, commands };
 }
-function measure(lock: Fixture, implementation: Implementation, clock: () => number): { solution: Solution; elapsed: number } {
-  const definition = structuredClone({ state: lock.state, links: lock.links }); const before = JSON.stringify(definition);
-  const start = clock(); const raw = implementation.solve(definition); const elapsed = clock() - start;
-  assert.equal(JSON.stringify(definition), before, `${lock.id}: solver mutated its input.`);
-  return { solution: validateSolution(lock, implementation.normalize(raw)), elapsed };
-}
-export function runComparison(options: {
-  locks?: Fixture[]; candidate: Implementation; baseline: Implementation; baselineSnapshot?: Snapshot;
-  repetitions?: number; warmups?: number; clock?: () => number;
+
+export function runBenchmark(options: {
+  solve: Solver;
+  locks?: readonly Fixture[];
+  repetitions?: number;
+  warmups?: number;
+  clock?: () => number;
   onProgress?: (completed: number, total: number, id: string) => void;
-}) {
-  const locks = options.locks ?? loadCatalog(); const repetitions = options.repetitions ?? 7;
-  const warmups = options.warmups ?? 2; const clock = options.clock ?? (() => performance.now());
-  if (!Number.isSafeInteger(repetitions) || repetitions < 1 || !Number.isSafeInteger(warmups) || warmups < 0) throw new Error('Invalid repetition/warmup count.');
-  if (locks.length === 0 || new Set(locks.map((lock) => lock.id)).size !== locks.length) throw new Error('Expected unique nonempty fixture set.');
-  const implementations = { candidate: options.candidate, baseline: options.baseline };
-  const entries = Object.entries(implementations);
-  const results = locks.map((lock, lockIndex) => {
-    const selfA: number[] = []; const selfB: number[] = [];
-    let baselineControl: Solution | undefined;
+}): Measurement[] {
+  const locks = options.locks ?? loadCatalog();
+  const repetitions = count(options.repetitions ?? 7, 1, 'repetitions');
+  const warmups = count(options.warmups ?? 2, 0, 'warmups');
+  const clock = options.clock ?? (() => performance.now());
+  if (locks.length === 0 || new Set(locks.map((lock) => lock.id)).size !== locks.length) {
+    throw new Error('Expected unique nonempty fixtures.');
+  }
+  return locks.map((lock, index) => {
+    const samplesMs: number[] = [];
+    let solution: Solution | undefined;
     for (let round = -warmups; round < repetitions; round += 1) {
-      for (const slot of (round + warmups) % 2 === 0 ? [selfA, selfB] : [selfB, selfA]) {
-        const measured = measure(lock, options.baseline, clock);
-        if (baselineControl !== undefined) assert.deepEqual(measured.solution, baselineControl, `${lock.id}: nondeterministic baseline control.`);
-        baselineControl = measured.solution;
-        if (round >= 0) slot.push(measured.elapsed);
+      const definition = structuredClone({ state: lock.state, links: lock.links });
+      const before = JSON.stringify(definition);
+      const start = clock();
+      const raw = options.solve(definition);
+      const elapsed = clock() - start;
+      assert.equal(JSON.stringify(definition), before, `${lock.id}: solver mutated its input.`);
+      const measured = validateSolution(lock, raw);
+      if (solution !== undefined) {
+        assert.deepEqual(measured, solution, `${lock.id}: nondeterministic solution.`);
+      }
+      solution = measured;
+      if (round >= 0) {
+        samplesMs.push(elapsed);
       }
     }
-    const measured = new Map<string, { samplesMs: number[]; solution?: Solution }>();
-    for (const [name] of entries) measured.set(name, { samplesMs: [] });
-    for (let round = -warmups; round < repetitions; round += 1) {
-      const offset = (round + warmups + lockIndex) % entries.length;
-      for (let index = 0; index < entries.length; index += 1) {
-        const entry = entries[(offset + index) % entries.length]; if (entry === undefined) throw new Error('Missing implementation.');
-        const [name, implementation] = entry; const prior = measured.get(name); if (prior === undefined) throw new Error('Missing measurement.');
-        const call = measure(lock, implementation, clock);
-        if (prior.solution !== undefined) assert.deepEqual(call.solution, prior.solution, `${lock.id}/${name}: nondeterministic path.`);
-        prior.solution = call.solution;
-        if (round >= 0) prior.samplesMs.push(call.elapsed);
-      }
+    if (solution === undefined) {
+      throw new Error('Missing measured solution.');
     }
-    const solvers: Record<string, Measurement> = Object.fromEntries([...measured].map(([name, value]) => {
-      if (value.solution === undefined) throw new Error('Missing measured solution.');
-      return [name, { ...value.solution, samplesMs: value.samplesMs, timingMs: statistics(value.samplesMs) }];
-    }));
-    const candidate = solvers['candidate']; const baseline = solvers['baseline'];
-    if (candidate === undefined || baseline === undefined) throw new Error('Missing matched implementations.');
-    assert.deepEqual({ ...baseline, samplesMs: undefined, timingMs: undefined }, { ...baselineControl, samplesMs: undefined, timingMs: undefined }, 'Baseline changed between calibration and measurement.');
-    if (options.baselineSnapshot !== undefined) {
-      const stored = options.baselineSnapshot.locks.find((row) => row.id === lock.id);
-      if (stored === undefined || stored.optimumA !== lock.expectedActions) throw new Error(`${lock.id}: baseline snapshot optimum/identity mismatch.`);
-      assert.deepEqual(baseline.commands, stored.commands, `${lock.id}: target-branch baseline snapshot path drift.`);
-      assert.deepEqual(commandMetrics(baseline.commands), readMetrics(stored), `${lock.id}: target-branch baseline snapshot metrics drift.`);
-    }
-    const quality = compareMetrics(candidate, baseline);
-    const firstTiming = performanceVerdict(candidate.samplesMs, baseline.samplesMs, selfA, selfB);
-    const timingAttempts = [{ ...firstTiming, candidate: candidate.samplesMs, baseline: baseline.samplesMs, selfA, selfB }];
-    if (firstTiming.verdict !== 'passed' && repetitions >= 5) {
-      const repeatSamples = new Map<string, number[]>(['candidate', 'baseline', 'selfA', 'selfB'].map((name) => [name, []]));
-      const repeated = [['selfA', options.baseline], ['selfB', options.baseline], ['candidate', options.candidate], ['baseline', options.baseline]] as const;
-      for (let round = -warmups; round < repetitions; round += 1) {
-        for (let index = 0; index < repeated.length; index += 1) {
-          const entry = repeated[(index + round + warmups) % repeated.length];
-          if (entry === undefined) throw new Error('Missing repeat entry.');
-          const [name, implementation] = entry;
-          const call = measure(lock, implementation, clock);
-          const expected: Measurement = name === 'candidate' ? candidate : baseline;
-          assert.deepEqual(call.solution.commands, expected.commands, `${lock.id}: nondeterministic repeat.`);
-          if (round >= 0) repeatSamples.get(name)?.push(call.elapsed);
-        }
-      }
-      const candidateRepeat = repeatSamples.get('candidate') ?? []; const baselineRepeat = repeatSamples.get('baseline') ?? [];
-      const selfARepeat = repeatSamples.get('selfA') ?? []; const selfBRepeat = repeatSamples.get('selfB') ?? [];
-      timingAttempts.push({ ...performanceVerdict(candidateRepeat, baselineRepeat, selfARepeat, selfBRepeat),
-        candidate: candidateRepeat, baseline: baselineRepeat, selfA: selfARepeat, selfB: selfBRepeat });
-    }
-    const repeatTiming = timingAttempts[1];
-    const timing = { ...firstTiming, verdict: repeatTiming === undefined ? firstTiming.verdict : confirmPerformance(firstTiming.verdict, repeatTiming.verdict),
-      reason: repeatTiming === undefined ? firstTiming.reason : `First: ${firstTiming.verdict}; bounded repeat: ${repeatTiming.verdict}. Conflicting verdicts remain inconclusive.` };
-    options.onProgress?.(lockIndex + 1, locks.length, lock.id);
-    return { id: lock.id, optimumA: lock.expectedActions, solvers, quality, timing,
-      timingAttempts, calibration: { baselineSelfA: selfA, baselineSelfB: selfB },
-      differences: Object.fromEntries(Object.entries(solvers).filter(([name]) => name !== 'candidate').map(([name, other]) => [name, compareMetrics(candidate, other)])) };
+    options.onProgress?.(index + 1, locks.length, lock.id);
+    return { id: lock.id, optimumA: lock.expectedActions, ...solution, samplesMs, timingMs: statistics(samplesMs) };
   });
-  const aggregates = Object.fromEntries(entries.map(([name]) => [name, results.reduce((total, row) => {
-    const result = row.solvers[name]; if (result === undefined) throw new Error('Missing solver aggregate.');
-    return { A: total.A + result.A, U: total.U + result.U, C: total.C + result.C, plateSwitches: total.plateSwitches + result.plateSwitches,
-      sumOfMediansMs: total.sumOfMediansMs + result.timingMs.median };
-  }, { A: 0, U: 0, C: 0, plateSwitches: 0, sumOfMediansMs: 0 })]));
-  return { schemaVersion: 1, createdAt: new Date().toISOString(),
-    config: { repetitions, warmups, lockCount: locks.length, scope: locks.length === 45 ? 'full-45-catalog' : 'subset',
-      timingBoundary: 'Only synchronous public solver call; cloning, legacy normalization, replay and metrics excluded.',
-      order: 'Per-lock baseline-vs-itself calibration first; matched rounds rotate by lock and round. A non-pass receives one bounded repeat with all raw attempts retained.',
-      uncertainty: 'Paired log-ratio mean with conservative 2.776 standard-error envelope; control sets tolerance. >=5 samples; >25% control envelope cannot certify a pass.',
-      gc: 'Natural GC; no forced collection.', fixtureSha256: catalogSha256 },
-    correctness: { passed: true }, quality: results.some((row) => row.quality.quality === 'regression') ? 'regression' : 'passed',
-    performance: combineVerdicts(results.map((row) => row.timing.verdict)),
-    implementations: Object.fromEntries(entries.map(([name, implementation]) => [name, implementation.label])), aggregates, results };
 }
-export type ComparisonReport = ReturnType<typeof runComparison>;
-export function renderMarkdown(report: ComparisonReport, metadata: unknown, memory: unknown): string {
-  const lines = ['# Gothic Lock Solver benchmark evidence', '', `Scope: **${report.config.scope}**; quality: **${report.quality}**; performance: **${report.performance}**.`, '',
-    `Warmups: ${report.config.warmups}; repetitions: ${report.config.repetitions}. A = grouped actions, U = distinct plates, C = unit divisions, S = plate switches.`, '',
-    report.config.timingBoundary, report.config.order, report.config.uncertainty, '',
-    '| Implementation | A | U | C | S | Sum of per-lock medians (ms) |', '| --- | ---: | ---: | ---: | ---: | ---: |'];
-  for (const [name, metrics] of Object.entries(report.aggregates)) lines.push(`| ${name} | ${metrics.A} | ${metrics.U} | ${metrics.C} | ${metrics.plateSwitches} | ${metrics.sumOfMediansMs.toFixed(3)} |`);
-  lines.push('', '| Lock | Optimum A | Implementation | A/U/C/S | Median / p95 ms | Quality vs base | Timing vs base |', '| --- | ---: | --- | --- | --- | --- | --- |');
-  for (const row of report.results) for (const [name, value] of Object.entries(row.solvers)) lines.push(`| ${row.id} | ${row.optimumA} | ${name} | ${value.A}/${value.U}/${value.C}/${value.plateSwitches} | ${value.timingMs.median.toFixed(3)} / ${value.timingMs.p95.toFixed(3)} | ${name === 'candidate' ? row.quality.quality : ''} | ${name === 'candidate' ? row.timing.verdict : ''} |`);
-  lines.push('', '## Per-lock candidate differences', '', '| Lock | Comparator | ΔA / ΔU / ΔC / ΔS |', '| --- | --- | --- |');
-  for (const row of report.results) for (const [name, difference] of Object.entries(row.differences)) lines.push(`| ${row.id} | ${name} | ${difference.deltas.A}/${difference.deltas.U}/${difference.deltas.C}/${difference.deltas.plateSwitches} |`);
-  lines.push('', '## Isolated process peak RSS', '', 'RSS includes Node, module loading and runtime allocation; it is not exact algorithm heap allocation. Browser peak memory is unavailable. Memory runs are separate from timed calls.', '', '```json', JSON.stringify(memory, null, 2), '```', '',
-    '## Environment and source provenance', '', '```json', JSON.stringify(metadata, null, 2), '```', '',
-    '## Interpretation', '', 'Every warmup and measured solution is replayed independently one unit division at a time, checked against the stored exact action minimum, input immutability and deterministic paths. Target snapshot changes cannot mask candidate drift: the supplied baseline module must reproduce the supplied baseline snapshot.', '',
-    'U/C/switches are descriptive and are still strict migration regression gates. Timings describe this Node runtime and machine only. A performance inconclusive verdict does not establish absence of regression. Sum of per-lock medians is not a whole-catalog wall-clock median. Raw samples, paths and calibration envelopes are in benchmark.json.', '');
-  return lines.join('\n');
+
+function count(value: unknown, minimum: number, label: string): number {
+  const parsed = integer(value, label);
+  if (parsed < minimum) {
+    throw new Error(`Invalid ${label} count.`);
+  }
+  return parsed;
 }
-export async function publishReport(report: ComparisonReport, outputDir: string, metadata: unknown = {}, memory: unknown = {}, baselineSnapshot?: Snapshot) {
-  if (!report.correctness.passed) throw new Error('Correctness gates must pass before publishing.');
-  const root = resolve(outputDir); await mkdir(root, { recursive: true });
-  const staged = await mkdtemp(join(root, '.benchmark-'));
-  const directory = join(root, `run-${report.createdAt.replaceAll(/[^0-9TZ]/g, '')}-${randomUUID().slice(0, 8)}`);
-  const full = { ...report, metadata, memory };
-  const json = `${JSON.stringify(full, null, 2)}\n`; const markdown = renderMarkdown(report, metadata, memory);
-  const metadataRecord = record(metadata);
-  const candidateSource = metadataRecord['candidate'] ?? {};
-  const qualitySnapshot = { schemaVersion: 1, fixtureSha256: catalogSha256, source: candidateSource,
-    reason: 'Measured candidate paths and quality in this immutable benchmark evidence.',
-    locks: report.results.map((row) => {
-      const value = row.solvers['candidate']; if (value === undefined) throw new Error('Missing candidate quality snapshot.');
-      return { id: row.id, optimumA: row.optimumA, A: value.A, U: value.U, C: value.C, plateSwitches: value.plateSwitches, commands: value.commands };
-    }) };
-  const evidence = { schemaVersion: 1, createdAt: report.createdAt, quality: report.quality, performance: report.performance, qualitySnapshot,
-    metadata, memory, config: report.config, aggregates: report.aggregates,
-    reports: { json: { path: 'benchmark.json', sha256: sha256(json) }, markdown: { path: 'benchmark.md', sha256: sha256(markdown) } } };
-  try {
-    if (baselineSnapshot !== undefined) await writeSnapshot(join(staged, 'baseline-snapshot.json'), baselineSnapshot);
-    await writeFile(join(staged, 'benchmark.json'), json, { flag: 'wx' });
-    await writeFile(join(staged, 'benchmark.md'), markdown, { flag: 'wx' });
-    await writeFile(join(staged, 'benchmark-evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' });
-    await rename(staged, directory);
-  } catch (error) { await rm(staged, { recursive: true, force: true }); throw error; }
-  return { directory, ...(baselineSnapshot === undefined ? {} : { baselineSnapshotPath: join(directory, 'baseline-snapshot.json') }), jsonPath: join(directory, 'benchmark.json'), markdownPath: join(directory, 'benchmark.md'), evidencePath: join(directory, 'benchmark-evidence.json') };
+
+function digest(value: unknown, length: number, label: string): string {
+  const parsed = string(value, label);
+  if (!new RegExp(`^[a-f0-9]{${length}}$`).test(parsed)) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  return parsed;
+}
+
+function totalMetrics(results: readonly Metrics[]): Metrics {
+  const totals = { A: 0, U: 0, C: 0, plateSwitches: 0 };
+  for (const row of results) {
+    totals.A += row.A;
+    totals.U += row.U;
+    totals.C += row.C;
+    totals.plateSwitches += row.plateSwitches;
+  }
+  return totals;
+}
+
+function compareReport(results: readonly Measurement[], memory: MemoryMeasurement, baseline?: BenchmarkReport): Comparison {
+  if (baseline === undefined) {
+    return { status: 'skipped', reason: 'No saved benchmark report was supplied for the exact target SHA.' };
+  }
+  const compared = results.map((row): ComparedLock => {
+    const previous = baseline.results.find((item) => item.id === row.id);
+    if (previous === undefined) {
+      throw new Error(`Baseline fixture missing: ${row.id}`);
+    }
+    return {
+      id: row.id,
+      baseline: readMetrics(previous),
+      ...compareMetrics(row, previous),
+      timingMedianRatio: historicalRatio(row.timingMs.median, previous.timingMs.median),
+      timingP95Ratio: historicalRatio(row.timingMs.p95, previous.timingMs.p95),
+    };
+  });
+  return {
+    status: 'compared',
+    baselineSha: baseline.source.revision,
+    quality: compared.some((row) => row.quality === 'regression') ? 'regression' : 'passed',
+    results: compared,
+    memoryPeakMedianRatio: memory.metric === baseline.memory.metric
+      ? historicalRatio(memory.peakRssBytes.median, baseline.memory.peakRssBytes.median)
+      : null,
+    limitations: historicalLimitations,
+  };
+}
+
+export function createReport(options: {
+  source: Source;
+  environment: Environment;
+  settings: Settings;
+  results: Measurement[];
+  memory: MemoryMeasurement;
+  baseline?: BenchmarkReport;
+}): BenchmarkReport {
+  const comparison = compareReport(options.results, options.memory, options.baseline);
+  return {
+    schemaVersion: 2,
+    createdAt: new Date().toISOString(),
+    source: options.source,
+    environment: options.environment,
+    settings: options.settings,
+    fixtures: { count: 45, catalogSha256 },
+    quality: comparison.status === 'compared' ? comparison.quality : 'passed',
+    results: options.results,
+    totals: totalMetrics(options.results),
+    memory: options.memory,
+    comparison,
+  };
+}
+
+function parseMeasurements(raw: unknown, repetitions: number): Measurement[] {
+  const rows = array(raw, 'benchmark results');
+  const catalog = loadCatalog();
+  if (rows.length !== catalog.length) {
+    throw new Error('Benchmark report requires all 45 locks.');
+  }
+  return catalog.map((lock, index) => {
+    const row = record(rows[index], 'benchmark lock');
+    if (row['id'] !== lock.id || row['optimumA'] !== lock.expectedActions) {
+      throw new Error('Benchmark fixture identity or optimum mismatch.');
+    }
+    const solution = validateSolution(lock, row['commands']);
+    assert.deepEqual(readMetrics(row), commandMetrics(solution.commands), 'Report metric/path mismatch.');
+    const samplesMs = array(row['samplesMs'], 'timing samples').map((value) => {
+      if (typeof value !== 'number') {
+        throw new Error('Invalid timing sample.');
+      }
+      return value;
+    });
+    if (samplesMs.length !== repetitions) {
+      throw new Error('Timing sample count mismatch.');
+    }
+    const timingMs = statistics(samplesMs);
+    assert.deepEqual(row['timingMs'], timingMs, 'Timing statistics mismatch.');
+    return { id: lock.id, optimumA: lock.expectedActions, ...solution, samplesMs, timingMs };
+  });
+}
+
+function ratio(value: unknown): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('Invalid historical ratio.');
+  }
+  return value;
+}
+
+function parseComparison(raw: unknown, results: readonly Measurement[]): Comparison {
+  const value = record(raw, 'comparison');
+  if (value['status'] === 'skipped') {
+    const reason = string(value['reason'], 'comparison skip reason');
+    if (reason.trim() === '') {
+      throw new Error('Comparison skip reason missing.');
+    }
+    return { status: 'skipped', reason };
+  }
+  if (value['status'] !== 'compared') {
+    throw new Error('Invalid comparison status.');
+  }
+  const rows = array(value['results'], 'comparison results');
+  if (rows.length !== results.length) {
+    throw new Error('Comparison requires every lock.');
+  }
+  const compared = results.map((current, index): ComparedLock => {
+    const row = record(rows[index], 'comparison lock');
+    if (row['id'] !== current.id) {
+      throw new Error('Comparison fixture mismatch.');
+    }
+    const baseline = readMetrics(row['baseline']);
+    if (Object.values(baseline).some((metric) => metric < 0) || baseline.A !== current.optimumA) {
+      throw new Error('Invalid baseline metrics.');
+    }
+    const comparison = compareMetrics(current, baseline);
+    assert.deepEqual(row['deltas'], comparison.deltas, 'Comparison delta mismatch.');
+    assert.deepEqual(row['regressions'], comparison.regressions, 'Comparison regressions mismatch.');
+    if (row['quality'] !== comparison.quality) {
+      throw new Error('Comparison lock quality mismatch.');
+    }
+    return {
+      id: current.id,
+      baseline,
+      ...comparison,
+      timingMedianRatio: ratio(row['timingMedianRatio']),
+      timingP95Ratio: ratio(row['timingP95Ratio']),
+    };
+  });
+  const quality = compared.some((row) => row.quality === 'regression') ? 'regression' : 'passed';
+  if (value['quality'] !== quality) {
+    throw new Error('Comparison quality mismatch.');
+  }
+  return {
+    status: 'compared',
+    baselineSha: digest(value['baselineSha'], 40, 'baseline SHA'),
+    quality,
+    results: compared,
+    memoryPeakMedianRatio: ratio(value['memoryPeakMedianRatio']),
+    limitations: string(value['limitations'], 'historical limitations'),
+  };
+}
+
+export function parseReport(raw: unknown, expectedSha?: string): BenchmarkReport {
+  const value = record(raw, 'benchmark report');
+  const fixtures = record(value['fixtures'], 'report fixtures');
+  if (value['schemaVersion'] !== 2 || fixtures['count'] !== 45 || fixtures['catalogSha256'] !== catalogSha256) {
+    throw new Error('Report schema or fixture catalog mismatch.');
+  }
+  const rawSource = record(value['source'], 'report source');
+  const revision = digest(rawSource['revision'], 40, 'source revision');
+  const moduleSha256 = digest(rawSource['moduleSha256'], 64, 'source module checksum');
+  if (typeof rawSource['dirty'] !== 'boolean') {
+    throw new Error('Missing source dirty status.');
+  }
+  if (expectedSha !== undefined && revision !== digest(expectedSha, 40, 'expected source SHA')) {
+    throw new Error('Report source revision differs from exact target SHA.');
+  }
+  if (expectedSha !== undefined && rawSource['dirty']) {
+    throw new Error('An exact source SHA report requires a clean checkout; report is dirty.');
+  }
+  const source = { revision, moduleSha256, dirty: rawSource['dirty'] };
+  const rawSettings = record(value['settings'], 'benchmark settings');
+  const settings = {
+    warmups: count(rawSettings['warmups'], 0, 'warmups'),
+    repetitions: count(rawSettings['repetitions'], 1, 'repetitions'),
+    memoryRepetitions: count(rawSettings['memoryRepetitions'], 1, 'memory repetitions'),
+  };
+  const rawEnvironment = record(value['environment'], 'benchmark environment');
+  const environment = {
+    node: string(rawEnvironment['node']),
+    v8: string(rawEnvironment['v8']),
+    platform: string(rawEnvironment['platform']),
+    arch: string(rawEnvironment['arch']),
+    cpu: string(rawEnvironment['cpu']),
+    logicalCpus: count(rawEnvironment['logicalCpus'], 1, 'logical CPUs'),
+    osRelease: string(rawEnvironment['osRelease']),
+    totalMemoryBytes: count(rawEnvironment['totalMemoryBytes'], 1, 'total memory'),
+  };
+  const createdAt = string(value['createdAt'], 'report timestamp');
+  if (!Number.isFinite(Date.parse(createdAt))) {
+    throw new Error('Invalid report timestamp.');
+  }
+  const results = parseMeasurements(value['results'], settings.repetitions);
+  const totals = totalMetrics(results);
+  assert.deepEqual(value['totals'], totals, 'Report totals mismatch.');
+  const memory = parseMemory(value['memory'], settings.memoryRepetitions);
+  const comparison = parseComparison(value['comparison'], results);
+  const quality = comparison.status === 'compared' ? comparison.quality : 'passed';
+  if (value['quality'] !== quality) {
+    throw new Error('Report quality mismatch.');
+  }
+  return {
+    schemaVersion: 2,
+    createdAt,
+    source,
+    environment,
+    settings,
+    fixtures: { count: 45, catalogSha256 },
+    quality,
+    results,
+    totals,
+    memory,
+    comparison,
+  };
+}
+
+export function readReport(path: string, expectedSha?: string): BenchmarkReport {
+  return parseReport(jsonFile(path), expectedSha);
+}
+
+function renderComparison(comparison: Comparison): string {
+  if (comparison.status === 'skipped') {
+    return `Comparison: **skipped**. ${comparison.reason}`;
+  }
+  const rows = comparison.results.map((row) => [
+    '',
+    row.id,
+    row.deltas.A,
+    row.deltas.U,
+    row.deltas.C,
+    row.deltas.plateSwitches,
+    row.timingMedianRatio?.toFixed(3) ?? 'unavailable',
+    row.timingP95Ratio?.toFixed(3) ?? 'unavailable',
+    '',
+  ].join(' | '));
+  const memoryRatio = comparison.memoryPeakMedianRatio?.toFixed(3)
+    ?? 'unavailable (different metrics or zero baseline)';
+  return [
+    `Comparison: **${comparison.quality}**, saved report for ${comparison.baselineSha}.`,
+    '',
+    comparison.limitations,
+    '',
+    '| Lock | Δ actions | Δ distinct plates | Δ unit shifts | Δ switches | Median ratio | p95 ratio |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+    ...rows,
+    '',
+    `Whole-catalog RSS median ratio: ${memoryRatio}.`,
+  ].join('\n');
+}
+
+function renderMarkdown(report: BenchmarkReport): string {
+  const rows = report.results.map((row) => [
+    '',
+    row.id,
+    row.A,
+    row.U,
+    row.C,
+    row.plateSwitches,
+    row.timingMs.median.toFixed(3),
+    row.timingMs.p95.toFixed(3),
+    '',
+  ].join(' | '));
+  const summary = [
+    `Quality: **${report.quality}**. All 45 fixed locks replayed and exact action minima checked.`,
+    `Totals: ${report.totals.A} actions, ${report.totals.U} distinct plates summed per lock,`,
+    `${report.totals.C} unit shifts, ${report.totals.plateSwitches} switches.`,
+  ].join(' ');
+  const environment = [
+    `Node ${report.environment.node}; ${report.environment.platform}/${report.environment.arch};`,
+    `${report.environment.cpu}. ${report.settings.warmups} warmups and`,
+    `${report.settings.repetitions} measured solves per lock.`,
+    'Timings cover the solver call, excluding input cloning and independent validation.',
+  ].join(' ');
+  const memory = [
+    `Whole-catalog Node peak RSS median: ${report.memory.peakRssBytes.median} bytes;`,
+    `p95: ${report.memory.peakRssBytes.p95} bytes`,
+    `(${report.memory.samples.length} fresh-process observations, ${report.memory.metric}).`,
+  ].join(' ');
+  return [
+    '# Gothic Lock Solver benchmark',
+    '',
+    `Source: ${report.source.revision}; dirty: ${report.source.dirty}. ${report.createdAt}`,
+    '',
+    summary,
+    '',
+    environment,
+    '',
+    '| Lock | Actions | Distinct plates | Unit shifts | Switches | Median ms | p95 ms |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+    ...rows,
+    '',
+    renderComparison(report.comparison),
+    '',
+    memory,
+    '',
+    report.memory.limitations,
+    '',
+    report.memory.browser.reason,
+    '',
+    'Commands, raw timings, RSS samples, and environment details are retained in benchmark.json.',
+    '',
+  ].join('\n');
+}
+
+export async function publishReport(report: BenchmarkReport, outputDir: string): Promise<{ jsonPath: string; markdownPath: string }> {
+  parseReport(report);
+  await mkdir(outputDir, { recursive: true });
+  const jsonPath = join(outputDir, 'benchmark.json');
+  const markdownPath = join(outputDir, 'benchmark.md');
+  await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  await writeFile(markdownPath, renderMarkdown(report));
+  return { jsonPath, markdownPath };
 }
