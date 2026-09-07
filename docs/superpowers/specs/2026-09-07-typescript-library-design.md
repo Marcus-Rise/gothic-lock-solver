@@ -3,6 +3,13 @@
 Статус: **черновик для согласования, реализация не начата**.
 Дата: 2026-09-07. Текущая задача ограничена нашим репозиторием.
 
+Название, выбранное пользователем: **Gothic Lock Solver**.
+Публичное npm-имя: **`gothic-lock-solver`** (без scope).
+Имена новых npm-пакетов записываются строчными URL-safe символами, без пробелов.
+Проверка `https://registry.npmjs.org/gothic-lock-solver` от 2026-09-07 вернула
+404 `Not found`: опубликованный пакет под этим именем не найден. Имя пока
+не зарегистрировано нами; возможность первой публикации перепроверяется перед выпуском.
+
 ## Цель и границы
 
 Превратить проверенный решатель в читаемую, типизированную и воспроизводимо
@@ -359,8 +366,8 @@ node_modules и браузерные бинарники в отчётные arti
 
 После будущего слияния в `main` workflow проверяет точный merge commit. Для выпуска
 используется одна согласованная SemVer-версия в package.json, npm и GitHub tag.
-Имя npm-пакета и права на его scope проверяются до первой публикации;
-совпадение GitHub username с npm username не предполагается.
+До первой публикации проверяются доступность имени `gothic-lock-solver` и
+npm-аккаунт владельца. Совпадение GitHub username с npm username не предполагается.
 
 Последовательность выпуска:
 
@@ -427,7 +434,7 @@ verdict и ссылки/хэши подробного отчёта. Для пе�
    декларации; пакет имеет явный ESM export. Classic IIFE не выдаётся за CommonJS.
 2. Вставить в HTML script/import с прямым URL файла на CDN. Для предлагаемого
    jsDelivr это URL точной версии и полного пути к готовому файлу:
-   `https://cdn.jsdelivr.net/npm/<package>@<exact-version>/dist/gothic-lock-solver.min.js`.
+   `https://cdn.jsdelivr.net/npm/gothic-lock-solver@<exact-version>/dist/gothic-lock-solver.min.js`.
    Аналогично подключаются читаемый .js и оба .mjs.
 
 UNPKG также поддерживает эту архитектуру: `https://unpkg.com/<package>@<version>/<file>`.
@@ -438,11 +445,11 @@ host `cdn.jsdelivr.net` и префикс `/npm/`. Утверждения «лу
 предложении один основной CDN — jsDelivr; двойной загрузчик и автоматическое
 переключение между CDN не добавляются.
 
-Шаблон обязательного classic-подключения (PACKAGE/VERSION будут заменены
-подтверждёнными именем и версией после первого выпуска):
+Шаблон обязательного classic-подключения (VERSION будет заменена точной версией
+после первого проверенного выпуска):
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/PACKAGE@VERSION/dist/gothic-lock-solver.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gothic-lock-solver@VERSION/dist/gothic-lock-solver.min.js"></script>
 <script>
   const commands = GothicLockSolver.solveLock([6, 2], [[0, -1], [0, 0]]);
 </script>
@@ -497,6 +504,7 @@ AGENTS.md описывает реальные модули, инварианты
 - [Vitest Playwright provider](https://vitest.dev/config/browser/playwright)
 - [TypeScript strict](https://www.typescriptlang.org/tsconfig/strict.html)
 - [Публичные npm-пакеты](https://docs.npmjs.com/about-public-packages/)
+- [npm package.json: правила имени](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#name)
 - [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/)
 - [npm publish: tarball и неизменяемость версии](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 - [GitHub Actions: закрепление SHA и обновления](https://docs.github.com/en/actions/reference/security/secure-use)
