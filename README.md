@@ -1,113 +1,83 @@
 # Gothic Lock Solver
 
-Решатель пластинчатых замков из **Gothic 1 Remake**. По начальному состоянию и направленной матрице зависимостей программа находит кратчайшую последовательность команд для установки всех пластин в позицию `4`.
+An exact solver for Gothic 1 Remake coupled plate locks: minimum grouped actions,
+then minimum unit shifts among equally short action sequences. A
+TypeScript library and standalone Node.js CLI share one mathematical core with
+no runtime dependencies. One action can move a plate several positions.
 
-## Возможности
+> The first public package is being prepared. npm/CDN examples become available
+> after publication; replace `VERSION` with an exact published version.
 
-- от 2 до 7 пластин, по 7 позиций у каждой;
-- направленные синхронные и реверсивные зависимости;
-- атомарная блокировка недопустимого хода;
-- поиск кратчайшего решения по количеству команд;
-- вывод в консоль или JSON-файл;
-- отсутствие сторонних зависимостей.
+## Library
 
-## Требования
-
-- Node.js 20 или новее.
-
-Устанавливать пакеты не требуется.
-
-## Формат входного файла
-
-```json
-{
-  "state": [1, 7, 4, 2, 6],
-  "links": [
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0]
-  ]
-}
+```sh
+npm install gothic-lock-solver
 ```
 
-- `state` — текущие позиции пластин от `1` до `7`;
-- `links[i][j] = 1` — пластина `j` движется вместе с выбранной пластиной `i`;
-- `links[i][j] = -1` — пластина `j` движется в противоположном направлении;
-- `links[i][j] = 0` — зависимости нет;
-- диагональ матрицы всегда равна `0`.
+```ts
+import { solveLock, createSolverConfig } from "gothic-lock-solver";
 
-Влево увеличивает позицию на `1`, вправо уменьшает её на `1`. Цель — состояние `[4, 4, ...]`.
-
-## Пример использования
-
-```bash
-node solve-lock.mjs examples/lock.example.json
+const state = [6, 2] as const;
+const links = [[0, -1], [0, 0]] as const;
+solveLock(state, links); // [[0, -2]]
+solveLock(state, links, createSolverConfig({ maxVisited: 500_000 }));
 ```
 
-Ответ в консоли:
+Namespace imports (`import * as GothicLockSolver`) are also supported. Positions
+are 1–7, the goal is 4, and `links[source][target]` is −1/0/+1 with zero diagonal.
+Links apply directly without cascading. Commands are `[zeroBasedIndex, signedPinDelta]`.
+Inputs remain unchanged; successful results minimize grouped actions.
 
-```text
-Найдено команд: 4
-1. Пластина 1 - влево x3
-2. Пластина 2 - вправо x3
-3. Пластина 4 - влево x2
-4. Пластина 5 - вправо x2
+`[]` means already open; `null` means proved unreachable. Invalid input/config
+throws `LockInputError`; exhausted computation throws `SearchLimitError`.
+Read [API](wiki/api.md), [configuration](wiki/configuration.md) and
+[mathematics and complexity](wiki/algorithm.md) for precise guarantees and limits.
+
+## Browser and CLI
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/gothic-lock-solver@VERSION/dist/gothic-lock-solver.min.js"></script>
+<script>
+  console.log(GothicLockSolver.solveLock([6, 2], [[0, -1], [0, 0]]));
+</script>
 ```
 
-Для сохранения результата в JSON:
+Browser modules import named exports from the corresponding `.mjs` URL.
 
-```bash
-node solve-lock.mjs examples/lock.example.json --output solution.json
+```sh
+gothic-lock-solver lock.json --config solver.config.json --output solution.json
+node gothic-lock-solver.cli.mjs lock.json --config solver.config.json
 ```
 
-Пример `solution.json`:
+`lock.json` contains `state` and `links`; config JSON contains partial overrides.
+Both flags are optional. CLI messages are Russian; exits are 0 solved, 2 unreachable
+and 1 error. `--help` lists options. Use maintained Node.js 22, 24 or 26.
 
-```json
-{
-  "status": "solved",
-  "initialState": [1, 7, 4, 2, 6],
-  "targetState": [4, 4, 4, 4, 4],
-  "commands": [
-    {
-      "plate": 1,
-      "direction": "left",
-      "steps": 3
-    },
-    {
-      "plate": 2,
-      "direction": "right",
-      "steps": 3
-    },
-    {
-      "plate": 4,
-      "direction": "left",
-      "steps": 2
-    },
-    {
-      "plate": 5,
-      "direction": "right",
-      "steps": 2
-    }
-  ],
-  "finalState": [4, 4, 4, 4, 4],
-  "metrics": {
-    "commands": 4,
-    "divisions": 10,
-    "plateSwitches": 3
-  }
-}
+Vite builds `src/index.ts` and `src/cli.ts` into five self-contained choices:
+
+| Generated file | Consumer |
+| --- | --- |
+| `gothic-lock-solver.mjs` / `gothic-lock-solver.min.mjs` | Readable / minified ESM |
+| `gothic-lock-solver.js` / `gothic-lock-solver.min.js` | Readable / minified classic script |
+| `gothic-lock-solver.cli.mjs` | Standalone Node.js CLI |
+
+Core browser builds use ES2022. A Worker can isolate synchronous search from the UI.
+
+## Development
+
+```sh
+pnpm install --frozen-lockfile
+pnpm exec playwright install --with-deps chromium firefox webkit
+pnpm test
 ```
 
-## Проверка
+Tests cover 45 fixed inputs, independent small-state oracles, configuration,
+Node/browser consumers and the installed package. Coverage requires 80% each for
+statements, branches, functions and lines; strict types and lint warnings are enforced.
 
-```bash
-npm test
-```
+Read [development](wiki/development.md), [benchmarks](wiki/benchmarks.md),
+[releases](wiki/releasing.md) and [AGENTS](AGENTS.md). Generated builds,
+reports and coverage are CI artifacts, with the benchmark report attached to GitHub
+Releases. They are not committed to the source repository.
 
-Подробная [спецификация](docs/superpowers/specs/2026-08-31-gothic-lock-solver.md) и [выполненный план реализации](docs/superpowers/plans/2026-08-31-gothic-lock-solver.md) находятся в `docs/superpowers`.
-
-## Лицензия
-
-[Apache License 2.0](LICENSE)
+Apache-2.0 — see [LICENSE](LICENSE).

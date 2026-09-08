@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/ban-ts-comment": [
+      "error",
+      {
+        "ts-ignore": true,
+        "ts-nocheck": true,
+        "ts-expect-error": "allow-with-description"
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "node_modules/**",
+    "artifacts/**",
+    "tests/e2e/distribution/fixtures/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/**/*.ts",
+        "vite.config.ts"
+      ],
+      "rules": {
+        "max-depth": [
+          "error",
+          3
+        ]
+      }
+    }
+  ]
+}

@@ -1,16 +1,72 @@
 {
   "name": "gothic-lock-solver",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "^22.0.0 || ^24.0.0 || ^26.0.0"
   },
   "scripts": {
-    "test": "node --test",
-    "solve": "node solve-lock.mjs"
+    "lint": "oxlint --deny-warnings src tests *.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm lint && pnpm typecheck",
+    "test": "pnpm check && pnpm test:coverage && pnpm build && pnpm test:distribution && pnpm test:browser && pnpm test:e2e && pnpm verify:package",
+    "test:node": "vitest run --project node",
+    "test:distribution": "vitest run --project distribution",
+    "test:browser": "vitest run --project chromium --project firefox --project webkit",
+    "test:e2e": "node tests/e2e/build-fixtures.ts && playwright test",
+    "test:coverage": "vitest run --project node --coverage",
+    "build": "vite build --mode readable && tsc -p tsconfig.build.json && vite build --mode minified && vite build --mode cli",
+    "verify:package": "node tests/e2e/verify-package.ts",
+    "benchmark": "node tests/benchmarks/benchmark.ts",
+    "solve": "node src/cli.ts"
+  },
+  "description": "Exact shortest-action solver for Gothic 1 Remake plate locks.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@12.3.4",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Marcus-Rise/gothic-lock-solver.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "types": "./dist/index.d.ts",
+  "module": "./dist/gothic-lock-solver.mjs",
+  "unpkg": "./dist/gothic-lock-solver.min.js",
+  "jsdelivr": "./dist/gothic-lock-solver.min.js",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/gothic-lock-solver.mjs"
+    },
+    "./dist/gothic-lock-solver.mjs": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/gothic-lock-solver.mjs"
+    },
+    "./dist/gothic-lock-solver.min.mjs": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/gothic-lock-solver.min.mjs"
+    },
+    "./dist/gothic-lock-solver.js": "./dist/gothic-lock-solver.js",
+    "./dist/gothic-lock-solver.min.js": "./dist/gothic-lock-solver.min.js",
+    "./package.json": "./package.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.4.1",
+    "@vitest/browser-playwright": "5.0.0",
+    "@vitest/coverage-v8": "5.0.0",
+    "oxlint": "1.81.0",
+    "playwright": "1.63.0",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "5.0.0"
   },
   "bin": {
-    "gothic-lock-solver": "./solve-lock.mjs"
+    "gothic-lock-solver": "./dist/gothic-lock-solver.cli.mjs"
   }
 }

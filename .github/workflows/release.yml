@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful main-push CI run
+        type: string
+        required: true
+      version:
+        description: Stable version, for example 1.0.0
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.ref == 'refs/heads/main' && vars.NPM_PUBLICATION_READY == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm-production
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
+      STABLE_VERSION: ${{ inputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global --ignore-scripts npm@12.0.2
+      - name: Download the successful main CI package
+        run: |
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID" > "$RUNNER_TEMP/run.json"
+          SOURCE_SHA=$(jq -er --arg repo "$GH_REPO" '
+            select(.repository.full_name == $repo and .head_repository.full_name == $repo and
+              .event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success" and
+              (.path | split("@")[0]) == ".github/workflows/ci.yml" and (.head_sha | test("^[a-f0-9]{40}$"))) | .head_sha
+          ' "$RUNNER_TEMP/run.json")
+          gh run download "$CI_RUN_ID" --repo "$GH_REPO" --name "build-$SOURCE_SHA" --dir "$RUNNER_TEMP/build"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "CI_RUN_ATTEMPT=$(jq -r .run_attempt "$RUNNER_TEMP/run.json")" >> "$GITHUB_ENV"
+      - name: Prepare version metadata and release files
+        run: |
+          tar -xzf "$RUNNER_TEMP/build/package.tgz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/package"
+          BASE_VERSION=$(jq -r .version package.json)
+          VERSION="${BASE_VERSION}-canary.${CI_RUN_ID}.${CI_RUN_ATTEMPT}.${SOURCE_SHA:0:12}"
+          NPM_TAG=canary
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$STABLE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            VERSION="$STABLE_VERSION"
+            NPM_TAG=latest
+          fi
+          for file in package.json dist/manifest.json; do
+            jq --arg version "$VERSION" '.version = $version' "$file" > "$file.tmp"
+            mv "$file.tmp" "$file"
+          done
+          mkdir "$RUNNER_TEMP/release"
+          npm pack --ignore-scripts --silent --pack-destination "$RUNNER_TEMP/release"
+          mv "$RUNNER_TEMP/release/gothic-lock-solver-$VERSION.tgz" "$RUNNER_TEMP/release/package.tgz"
+          cp dist/*.js dist/*.mjs "$RUNNER_TEMP/release/"
+          cp "$RUNNER_TEMP/build/benchmark.json" "$RUNNER_TEMP/build/benchmark.md" "$RUNNER_TEMP/release/"
+          {
+            printf '# Gothic Lock Solver %s\n\nSource: `%s`.\n\n' "$VERSION" "$SOURCE_SHA"
+            printf 'npm: https://www.npmjs.com/package/gothic-lock-solver/v/%s\n\n' "$VERSION"
+            printf 'CDN: https://cdn.jsdelivr.net/npm/gothic-lock-solver@%s/dist/\n\n' "$VERSION"
+            cat "$RUNNER_TEMP/build/benchmark.md"
+          } > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "NPM_TAG=$NPM_TAG" >> "$GITHUB_ENV"
+      - name: Publish npm package
+        run: npm publish "$RUNNER_TEMP/release/package.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+      - name: Create GitHub Release
+        run: |
+          flags=(--latest)
+          if [[ "$NPM_TAG" == canary ]]; then flags=(--prerelease --latest=false); fi
+          gh release create "v$VERSION" "$RUNNER_TEMP/release/"* --repo "$GH_REPO" \
+            --target "$SOURCE_SHA" --title "Gothic Lock Solver $VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" "${flags[@]}"
