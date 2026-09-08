@@ -34,15 +34,17 @@ Enable direct `npm publish` permission in the publisher settings. Follow the
 [official npm instructions](https://docs.npmjs.com/trusted-publishers/).
 Then set the repository variable `NPM_PUBLICATION_READY=true`.
 
-The workflow uses OIDC rather than a stored npm token. GitHub Actions and the npm
-and GitHub CLIs are official, pinned tools. Public npm, standard public GitHub
+The workflow uses OIDC rather than a stored npm token. Actions are pinned to
+official releases; GitHub CLI and jq are provided by GitHub's Ubuntu runner.
+Public npm, standard public GitHub
 runners and jsDelivr require no paid subscription for this setup.
 
 ## Automatic canaries
 
 A successful CI run for a push to main triggers the release workflow. The release
-job validates the originating repository, workflow, branch, event and run result,
-then downloads that run's build artifact by ID. PR artifacts cannot be published.
+job checks the selected CI run's workflow, branch, event and success,
+then downloads its named `build-SHA` artifact with `gh run download`.
+PR artifacts cannot be published.
 
 Preparation assigns a unique version such as
 `1.0.0-canary.RUN_ID.ATTEMPT.SOURCE_SHA_PREFIX`. It changes only the package version
@@ -52,7 +54,7 @@ The five runtime files are not rebuilt.
 
 The package is published under npm's `canary` tag and attached to a GitHub
 prerelease. Stable `latest` is unchanged. The full JSON/Markdown benchmark report,
-source identity and SHA256SUMS accompany the release.
+source identity and package/CDN links accompany the release.
 
 ## Manual stable release
 
@@ -69,8 +71,8 @@ The resulting npm version uses `latest` and a regular GitHub Release.
 
 If the artifact expired, run CI again before releasing. No source rebuild or
 fallback artifact is hidden inside the release workflow. Publication uses ordinary `npm publish` and `gh release create` commands.
-A duplicate npm version or existing GitHub tag stops publication. If delivery
-fails after npm succeeds, inspect the saved release artifact and complete the
+Standard npm and GitHub CLI errors stop publication. If delivery
+fails after npm succeeds, inspect the job log and published version, then complete the
 remaining delivery manually; rerunning the entire job is not an automatic recovery
 mechanism. Published npm versions are never overwritten.
 
@@ -86,13 +88,14 @@ upload is needed. Pin the complete version in integrations:
 </script>
 ```
 
-The release verifies the tested archive before repacking, compares the repacked
-files, and checks published CDN bytes/headers. CI has already
-checked the identical runtime files in Chromium, Firefox and WebKit. The fifth
+CI checks the runtime files in Chromium, Firefox and WebKit and verifies the
+installed archive in every matrix row. Release downloads that successful build,
+updates version metadata, packs and publishes it through the standard CLIs. The fifth
 file is the standalone Node CLI. Release assets include all five runtime files,
 the npm archive and the two benchmark reports.
 
 Official references: [workflow run triggers](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run),
-[artifact downloads](https://github.com/actions/download-artifact),
+[artifact downloads](https://cli.github.com/manual/gh_run_download),
+[runner tools](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md),
 [npm publishing](https://docs.npmjs.com/cli/commands/npm-publish/),
 [jsDelivr npm delivery](https://github.com/jsdelivr/jsdelivr#npm).

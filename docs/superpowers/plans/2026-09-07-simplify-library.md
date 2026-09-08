@@ -7,6 +7,10 @@ The September 8 refinement removes `.github/scripts` entirely: configuration
 belongs in Vite, ordinary build commands in package.json, and CI/release
 coordination directly in workflow YAML. Do not relocate wrappers or implement
 a custom publication recovery engine.
+The further simplification uses the runner's GitHub CLI directly, a single latest
+successful-run lookup for the benchmark, and standard download/pack/publish
+commands for releases. Do not repeat CI's file and benchmark validation in the
+publication job or build a CDN verification subsystem.
 
 ## CI
 
@@ -18,7 +22,7 @@ a custom publication recovery engine.
   Node version and environment. All rows must succeed for release.
 - Measure the current built solver on all 45 fixed inputs.
 - For a PR, use its target SHA; for main pushes, use the previous main SHA.
-- Look up a successful CI report artifact for exactly that commit.
+- Select the latest successful CI run for exactly that commit and its named report.
 - If no unexpired artifact exists, explicitly skip comparison. No source checkout,
   rebuild, npm lookup, previous-release fallback or synthetic baseline.
 - Compare deterministic quality metrics; report historical timing/memory ratios
@@ -34,9 +38,9 @@ a custom publication recovery engine.
   stable version by changing package/build version metadata only.
 - Manual stable dispatch takes a successful main CI run ID and stable SemVer.
 - Download only that run's tested build artifact. No algorithm rebuild.
-- Stable packaging changes only package/build version metadata; verify all other
-  archive bytes remain identical before publishing the new npm version.
-- Publish to npm through OIDC, check CDN delivery, attach five runtime
+- Stable packaging changes only package/build version metadata. Locally verify
+  that preparation preserves all other archive files; CI tests the built archive.
+- Publish to npm through OIDC, include CDN links, attach five runtime
   files, package archive and the benchmark report to the GitHub Release.
 - Keep the two workflows readable: CI build and matrix test jobs, and one
   publication job, using official pinned Actions.

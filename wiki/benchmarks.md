@@ -19,7 +19,8 @@ pnpm benchmark --baseline-report /path/to/benchmark.json --baseline-sha TARGET_S
 ```
 
 CI obtains `TARGET_SHA` from the PR target commit or the previous main commit.
-It looks for that exact commit's successful CI report artifact. If the artifact
+It selects the latest successful CI run for that exact commit and its named
+benchmark report artifact. If the artifact
 is absent or expired, the current benchmark still runs and explicitly records
 `comparison: skipped`. CI does not check out the target, rebuild it, execute its
 code or substitute an npm/GitHub release. API access failures and malformed reports
