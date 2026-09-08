@@ -1,14 +1,27 @@
 # CI and releases
 
-Two workflows, one job each:
+Two workflows. CI has a build job and a test matrix:
 
 | Workflow | Trigger | Result |
 | --- | --- | --- |
-| `ci.yml` | Pull request or push to main | Checks, five builds, tested package, benchmark report |
+| `ci.yml` | Pull request or push to main | One build and benchmark; six Node/browser test environments |
 | `release.yml` | Successful main-push CI | Automatic npm canary and GitHub prerelease |
 | `release.yml` | Manual dispatch | Stable version from a selected successful main CI run |
 
-CI runs the local commands. It downloads a benchmark baseline only when a report
+Build commands invoke Vite and TypeScript directly. CI and release coordination
+lives in the two workflow files; there are no repository script wrappers.
+
+The Node 24 build job runs lint, type checking, the build, distribution checks
+and benchmarks. Six Ubuntu matrix rows then test the same package archive:
+Node 22/24/26 and Chromium/Firefox/WebKit. Browser rows use Node 24 as their test
+driver and install only the selected browser. The matrix does not rebuild the
+distribution. Diagnostics identify the Node version and test environment.
+The build and every matrix row must succeed before automatic canary publication.
+Within a CI run, `build-SHA` and `benchmark-SHA` identify its canonical artifacts.
+Rerunning failed tests reuses the successful build; rerunning the build replaces
+its artifacts through GitHub's `overwrite` option.
+
+CI downloads a benchmark baseline only when a report
 exists for the exact target SHA; otherwise comparison is skipped. See
 [benchmarks](benchmarks.md). All build output, reports, coverage and browser
 diagnostics remain CI artifacts.
@@ -39,7 +52,7 @@ The five runtime files are not rebuilt.
 
 The package is published under npm's `canary` tag and attached to a GitHub
 prerelease. Stable `latest` is unchanged. The full JSON/Markdown benchmark report,
-source identity and file hashes accompany the release.
+source identity and SHA256SUMS accompany the release.
 
 ## Manual stable release
 
@@ -55,10 +68,11 @@ version into a stable SemVer, so stable delivery needs this metadata-only repack
 The resulting npm version uses `latest` and a regular GitHub Release.
 
 If the artifact expired, run CI again before releasing. No source rebuild or
-fallback artifact is hidden inside the release workflow. Existing npm versions
-must match the prepared bytes; a retry never overwrites a published version.
-A matching GitHub draft resumes by uploading missing assets, checking their hashes
-and publishing the completed draft. Existing complete releases remain unchanged.
+fallback artifact is hidden inside the release workflow. Publication uses ordinary `npm publish` and `gh release create` commands.
+A duplicate npm version or existing GitHub tag stops publication. If delivery
+fails after npm succeeds, inspect the saved release artifact and complete the
+remaining delivery manually; rerunning the entire job is not an automatic recovery
+mechanism. Published npm versions are never overwritten.
 
 ## Browser delivery
 
@@ -72,7 +86,8 @@ upload is needed. Pin the complete version in integrations:
 </script>
 ```
 
-The release verifies npm archive identity and CDN bytes/headers. CI has already
+The release verifies the tested archive before repacking, compares the repacked
+files, and checks published CDN bytes/headers. CI has already
 checked the identical runtime files in Chromium, Firefox and WebKit. The fifth
 file is the standalone Node CLI. Release assets include all five runtime files,
 the npm archive and the two benchmark reports.

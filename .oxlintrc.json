@@ -30,7 +30,7 @@
     {
       "files": [
         "src/**/*.ts",
-        ".github/scripts/**/*.ts"
+        "vite.config.ts"
       ],
       "rules": {
         "max-depth": [

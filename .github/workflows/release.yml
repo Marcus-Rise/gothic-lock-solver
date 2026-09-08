@@ -38,13 +38,10 @@ jobs:
       id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
-      NPM_PUBLICATION_READY: ${{ vars.NPM_PUBLICATION_READY }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Check out trusted main release tools
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.19.0
@@ -62,28 +59,122 @@ jobs:
         id: build
         env:
           REQUESTED_RUN: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
-        run: node .github/scripts/artifact.ts release "$REQUESTED_RUN"
+        run: |
+          [[ "$REQUESTED_RUN" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REQUESTED_RUN" > "$RUNNER_TEMP/run.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .repository.full_name == $repo and .head_repository.full_name == $repo and
+            .event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success" and
+            (.path | split("@")[0]) == ".github/workflows/ci.yml" and
+            (.head_sha | test("^[a-f0-9]{40}$")) and .run_attempt >= 1
+          ' "$RUNNER_TEMP/run.json"
+          SOURCE_SHA=$(jq -r .head_sha "$RUNNER_TEMP/run.json")
+          RUN_ATTEMPT=$(jq -r .run_attempt "$RUNNER_TEMP/run.json")
+          ARTIFACT_NAME="build-$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REQUESTED_RUN/artifacts?per_page=100" --paginate |
+            jq -res --arg name "$ARTIFACT_NAME" '
+              [.[].artifacts[] | select(.name == $name and .expired == false)] |
+              if length == 1 then .[0].id else error("Expected one unexpired CI build") end
+            ' > "$RUNNER_TEMP/artifact-id"
+          echo "artifact-id=$(cat "$RUNNER_TEMP/artifact-id")" >> "$GITHUB_OUTPUT"
+          echo "run-id=$REQUESTED_RUN" >> "$GITHUB_OUTPUT"
+          echo "run-attempt=$RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "source-sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ steps.build.outputs.artifact-id }}
           run-id: ${{ steps.build.outputs.run-id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/build
-      - name: Prepare release metadata without rebuilding runtime files
+      - name: Assign version without rebuilding tested files
+        id: release
         env:
-          RELEASE_SOURCE_SHA: ${{ steps.build.outputs.source-sha }}
+          SOURCE_SHA: ${{ steps.build.outputs.source-sha }}
           CI_RUN_ID: ${{ steps.build.outputs.run-id }}
           CI_RUN_ATTEMPT: ${{ steps.build.outputs.run-attempt }}
           STABLE_VERSION: ${{ inputs.version }}
         run: |
-          args=(--input "$RUNNER_TEMP/build" --output "$RUNNER_TEMP/release")
-          if [ -n "$STABLE_VERSION" ]; then args+=(--version "$STABLE_VERSION"); fi
-          node .github/scripts/release.ts prepare "${args[@]}"
-          cat "$RUNNER_TEMP/release/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish npm, verify CDN and create GitHub Release
+          mkdir -p "$RUNNER_TEMP/original" "$RUNNER_TEMP/repacked" "$RUNNER_TEMP/release"
+          tar -xzf "$RUNNER_TEMP/build/package.tgz" -C "$RUNNER_TEMP/original" --no-same-owner
+          cp -a "$RUNNER_TEMP/original/package" "$RUNNER_TEMP/package"
+          cd "$RUNNER_TEMP/package"
+          BASE_VERSION=$(jq -er 'select(.name == "gothic-lock-solver") | .version' package.json)
+          [[ "$BASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          jq -e --arg sha "$SOURCE_SHA" --arg version "$BASE_VERSION" '
+            .schemaVersion == 1 and .package == "gothic-lock-solver" and
+            .sourceSha == $sha and .version == $version
+          ' dist/manifest.json
+          jq -r '.files | to_entries[] | "\(.value)  dist/\(.key)"' dist/manifest.json | sha256sum --check --strict
+          MODULE_SHA=$(sha256sum dist/gothic-lock-solver.mjs | cut -d ' ' -f 1)
+          jq -e --arg sha "$SOURCE_SHA" --arg module "$MODULE_SHA" '
+            .schemaVersion == 2 and .source.revision == $sha and .source.dirty == false and
+            .source.moduleSha256 == $module and .quality == "passed" and .fixtures.count == 45
+          ' "$RUNNER_TEMP/build/benchmark.json"
+          VERSION="${BASE_VERSION}-canary.${CI_RUN_ID}.${CI_RUN_ATTEMPT}.${SOURCE_SHA:0:12}"
+          TAG=canary
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$STABLE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            VERSION="$STABLE_VERSION"
+            TAG=latest
+          fi
+          for file in package.json dist/manifest.json; do
+            jq --arg version "$VERSION" '.version = $version' "$file" > "$file.tmp"
+            mv "$file.tmp" "$file"
+          done
+          npm pack --ignore-scripts --silent --pack-destination "$RUNNER_TEMP/release"
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          [[ ${#archives[@]} == 1 && -f "${archives[0]}" ]]
+          mv "${archives[0]}" "$RUNNER_TEMP/release/package.tgz"
+          tar -xzf "$RUNNER_TEMP/release/package.tgz" -C "$RUNNER_TEMP/repacked" --no-same-owner
+          diff -r "$RUNNER_TEMP/package" "$RUNNER_TEMP/repacked/package"
+          runtime=(dist/*.js dist/*.mjs)
+          [[ ${#runtime[@]} == 5 ]]
+          cp "${runtime[@]}" "$RUNNER_TEMP/release/"
+          cp "$RUNNER_TEMP/build/benchmark.json" "$RUNNER_TEMP/build/benchmark.md" "$RUNNER_TEMP/release/"
+          cd "$RUNNER_TEMP/release"
+          sha256sum package.tgz *.js *.mjs benchmark.json benchmark.md > SHA256SUMS
+          {
+            printf '# Gothic Lock Solver %s\n\nTested source: `%s`.\n\n' "$VERSION" "$SOURCE_SHA"
+            printf 'Install: `npm install gothic-lock-solver@%s`.\n\n' "$VERSION"
+            printf 'Browser module: https://cdn.jsdelivr.net/npm/gothic-lock-solver@%s/dist/gothic-lock-solver.min.mjs\n\n' "$VERSION"
+            printf 'Classic script: https://cdn.jsdelivr.net/npm/gothic-lock-solver@%s/dist/gothic-lock-solver.min.js\n\n' "$VERSION"
+            cat benchmark.md
+          } > release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Publish the tested archive to npm
         env:
-          RELEASE_SOURCE_SHA: ${{ steps.build.outputs.source-sha }}
-        run: node .github/scripts/release.ts publish --directory "$RUNNER_TEMP/release"
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$VERSION" |
+            jq -e --arg ref "refs/tags/v$VERSION" 'all(.[]; .ref != $ref)'
+          npm publish "$RUNNER_TEMP/release/package.tgz" --access public --tag "$TAG" --ignore-scripts --registry https://registry.npmjs.org
+      - name: Verify public CDN files
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          cd "$RUNNER_TEMP/release"
+          for file in *.js *.mjs; do
+            curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 --max-time 30 \
+              --dump-header "$RUNNER_TEMP/cdn-headers" \
+              "https://cdn.jsdelivr.net/npm/gothic-lock-solver@$VERSION/dist/$file" -o "$RUNNER_TEMP/$file"
+            grep -Eiq '^content-type: (application|text)/javascript' "$RUNNER_TEMP/cdn-headers"
+            grep -Eiq '^access-control-allow-origin: \*\s*$' "$RUNNER_TEMP/cdn-headers"
+            cmp "$file" "$RUNNER_TEMP/$file"
+          done
+      - name: Create GitHub Release with benchmark evidence
+        env:
+          SOURCE_SHA: ${{ steps.build.outputs.source-sha }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          flags=(--latest)
+          if [[ "$TAG" == canary ]]; then flags=(--prerelease --latest=false); fi
+          gh release create "v$VERSION" "$RUNNER_TEMP/release/"* --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" --title "Gothic Lock Solver $VERSION" \
+            --notes-file "$RUNNER_TEMP/release/release-notes.md" "${flags[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

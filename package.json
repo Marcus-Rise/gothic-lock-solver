@@ -7,7 +7,7 @@
     "node": "^22.0.0 || ^24.0.0 || ^26.0.0"
   },
   "scripts": {
-    "lint": "oxlint --deny-warnings src tests .github/scripts *.ts",
+    "lint": "oxlint --deny-warnings src tests *.ts",
     "typecheck": "tsc --noEmit",
     "check": "pnpm lint && pnpm typecheck",
     "test": "pnpm check && pnpm test:coverage && pnpm build && pnpm test:distribution && pnpm test:browser && pnpm test:e2e && pnpm verify:package",
@@ -16,7 +16,7 @@
     "test:browser": "vitest run --project chromium --project firefox --project webkit",
     "test:e2e": "node tests/e2e/build-fixtures.ts && playwright test",
     "test:coverage": "vitest run --project node --coverage",
-    "build": "node .github/scripts/build.ts",
+    "build": "vite build --mode readable && tsc -p tsconfig.build.json && vite build --mode minified && vite build --mode cli",
     "verify:package": "node tests/e2e/verify-package.ts",
     "benchmark": "node tests/benchmarks/benchmark.ts",
     "solve": "node src/cli.ts"

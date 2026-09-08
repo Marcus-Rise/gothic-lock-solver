@@ -18,8 +18,10 @@ work is in the [current plan](docs/superpowers/plans/2026-09-07-simplify-library
 - `src/index.ts` and `src/cli.ts` are the two build entries. CLI invokes the same
   public solver/factory. Shared mathematics has one implementation.
 - Keep source flat under `src/`; tests in `tests/unit`, `tests/e2e` and
-  `tests/benchmarks`; maintained documentation in `wiki/`. `.github/scripts`
-  contains necessary build/release coordination. Keep only the current plan in `docs/`.
+  `tests/benchmarks`; maintained documentation in `wiki/`. Build configuration
+  belongs in `vite.config.ts`; CI and publication steps stay directly in workflow
+  YAML. Do not introduce orchestration wrappers or a scripts directory.
+  Keep only the current plan in `docs/`.
 
 ## Engineering
 
@@ -33,7 +35,7 @@ Use descriptive domain names and one operation per statement. Give domain bounds
 byte sizes and sentinel values names; ordinary loop indices need no constant.
 Keep the top-level search/release flow readable in order. Necessary matrix loops
 remain explicit, with short bodies; do not hide them in allocation-heavy pipelines.
-Oxlint limits block nesting to three levels in `src/` and `.github/scripts/`.
+Oxlint limits block nesting to three levels in `src/` and `vite.config.ts`.
 Review responsibilities and data flow as well as tests; passing gates alone does
 not establish maintainability.
 
@@ -58,7 +60,9 @@ experiments. Preserve deterministic quality checks; do not change expected minim
 or comparison thresholds merely to turn a regression green.
 
 All local gates precede workflow edits. Independently review the final diff and
-check hosted CI on the exact head. CI builds and checks; a separate release
+check hosted CI on the exact head. CI builds and benchmarks once on Node 24, then
+tests that same archive in six matrix rows: Node 22/24/26 and Chromium/Firefox/
+WebKit. Browser rows use Node 24 to drive tests. A separate release
 workflow publishes main canaries after successful CI and stable versions only
 through a manual dispatch selecting a tested main CI run. Working logs/review outputs belong in ignored
 `artifacts/` and CI artifacts. Use official SHA-pinned Actions, npm/gh CLIs and free

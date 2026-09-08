@@ -3,18 +3,24 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
-const consumerNodes = new Set([process.execPath]);
-const args = process.argv.slice(2);
-for (let index = 0; index < args.length; index += 2) {
-  const executable = args[index + 1];
-  if (args[index] !== '--node' || executable === undefined || executable.length === 0) {
-    throw new Error('Usage: pnpm verify:package [--node PATH]...');
-  }
-  consumerNodes.add(executable);
-}
+const { values } = parseArgs({
+  options: {
+    archive: { type: 'string' },
+    browser: { type: 'string' },
+    node: { type: 'string', multiple: true },
+  },
+});
+const browsers = ['none', 'chromium', 'firefox', 'webkit'];
+assert.ok(values.browser === undefined || browsers.includes(values.browser), 'Browser must be none, chromium, firefox or webkit');
+assert.ok(values.archive !== '', 'Archive path must not be empty');
+assert.ok(values.node?.every(path => path.length > 0) ?? true, 'Node executable path must not be empty');
+const browser = values.browser ?? 'all';
+const suppliedArchive = values.archive === undefined ? undefined : resolve(values.archive);
+const consumerNodes = new Set([process.execPath, ...(values.node ?? [])]);
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const temporary = await mkdtemp(join(tmpdir(), 'gothic-package-consumer-'));
@@ -28,15 +34,18 @@ function run(command: string, args: readonly string[], cwd = temporary): string 
 }
 try {
   await mkdir(artifacts, { recursive: true });
-  // A failed fresh check must not leave a stale archive labeled verified.
-  await rm(destination, { force: true });
+  // Preserve a supplied archive even when its verification fails.
+  if (suppliedArchive !== destination) await rm(destination, { force: true });
   await rm(checksumPath, { force: true });
-  run(npm, ['pack', '--json', '--ignore-scripts', '--pack-destination', temporary], root);
-  const archives = (await readdir(temporary)).filter((name) => name.endsWith('.tgz'));
-  const archive = archives[0];
-  assert.equal(archives.length, 1, 'Pack must create exactly one tarball');
-  assert.ok(archive);
-  const archivePath = join(temporary, archive);
+  let archivePath = suppliedArchive;
+  if (archivePath === undefined) {
+    run(npm, ['pack', '--ignore-scripts', '--pack-destination', temporary], root);
+    const archives = (await readdir(temporary)).filter((name) => name.endsWith('.tgz'));
+    const archive = archives[0];
+    assert.equal(archives.length, 1, 'Pack must create exactly one tarball');
+    assert.ok(archive);
+    archivePath = join(temporary, archive);
+  }
   await writeFile(join(temporary, 'package.json'), JSON.stringify({ name: 'gothic-clean-consumer', version: '1.0.0', private: true, type: 'module' }));
   run(npm, ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', archivePath]);
   const packageRoot = join(temporary, 'node_modules', 'gothic-lock-solver');
@@ -71,15 +80,17 @@ try {
   for (const executable of consumerNodes) {
     process.stdout.write(run(executable, [join(temporary, 'runtime-consumer.js')]));
   }
-  run(process.execPath, [join(root, 'tests', 'e2e', 'build-fixtures.ts')], root);
-  // Reuse byte-preserving HTTP and isolated file consumers against installed
-  // tarball files. Vite and source resolution are absent from these pages.
-  execFileSync(process.execPath, [join(root, 'node_modules', 'playwright', 'cli.js'), 'test'], {
-    cwd: root,
-    env: { ...process.env, GOTHIC_DIST_DIRECTORY: packageDist },
-    stdio: 'inherit',
-  });
-  await copyFile(archivePath, destination);
+  if (browser !== 'none') {
+    run(process.execPath, [join(root, 'tests', 'e2e', 'build-fixtures.ts')], root);
+    // Isolated HTTP/file consumers load installed tarball bytes without Vite.
+    const browserArgs = browser === 'all' ? [] : ['--project', browser];
+    execFileSync(process.execPath, [join(root, 'node_modules', 'playwright', 'cli.js'), 'test', ...browserArgs], {
+      cwd: root,
+      env: { ...process.env, GOTHIC_DIST_DIRECTORY: packageDist },
+      stdio: 'inherit',
+    });
+  }
+  if (archivePath !== destination) await copyFile(archivePath, destination);
   const sha256 = createHash('sha256').update(await readFile(destination)).digest('hex');
   await writeFile(checksumPath, `${sha256}  package.tgz\n`);
   console.log(JSON.stringify({ verified: true, node: process.version, tarball: destination, sha256 }));

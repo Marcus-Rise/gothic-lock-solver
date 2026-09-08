@@ -33,7 +33,6 @@
   "include": [
     "src/**/*.ts",
     "tests/**/*.ts",
-    ".github/scripts/**/*.ts",
     "*.config.ts"
   ],
   "exclude": [

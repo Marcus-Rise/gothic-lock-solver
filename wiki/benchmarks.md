@@ -27,8 +27,9 @@ are errors, not missing baselines.
 
 A supplied report must match its claimed SHA, current schema and fixed catalog.
 Its commands are replayed and its recorded deterministic metrics checked before
-comparison. Artifacts include the CI attempt in their names so reruns do not
-silently replace an earlier report.
+comparison. The canonical `benchmark-SHA` artifact belongs to the selected CI
+run. Rerunning the build replaces its report; rerunning only failed test rows
+reuses the successful build and its report.
 
 ## Metrics and limits
 

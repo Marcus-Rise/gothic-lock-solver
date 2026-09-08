@@ -1,6 +1,6 @@
 # Development
 
-Use pnpm and maintained Node.js 24 or 26 for source development. Exact versions
+Use pnpm and maintained Node.js 22, 24 or 26 for source development. Exact versions
 and integrity hashes live in `package.json` and `pnpm-lock.yaml`. Generated
 JavaScript supports Node.js 22/24/26 and ES2022-capable core consumers.
 
@@ -24,6 +24,17 @@ Narrower commands: `pnpm check`, `pnpm test:node`, `pnpm test:coverage`,
 versions: `pnpm verify:package --node /path/to/node22 --node /path/to/node26`.
 Run [benchmarks](benchmarks.md) separately, after competing heavy tasks stop.
 
+CI builds and benchmarks once on Node 24, then distributes the same archive to
+six Ubuntu matrix rows: Node 22/24/26 and Chromium/Firefox/WebKit. Each row runs
+its selected Vitest project and verifies the installed archive. Browser rows use
+Node 24 to drive their static-page and installed-package E2E tests; the Node 24
+row collects coverage. All rows must pass before release.
+
+To verify an existing build without repacking, use
+`pnpm verify:package --archive /path/to/package.tgz --browser chromium`.
+The browser selector accepts `none`, `chromium`, `firefox` or `webkit`; omitting
+it runs all three browsers. The archive must match the checkout and its `dist/`.
+
 ## Structure
 
 `src/index.ts` and `src/cli.ts` are build entries for integrations and Node tooling.
@@ -34,12 +45,15 @@ priority queue each own one responsibility. Config/default validation lives in
 Use domain names, named mechanical bounds and explicit units for packed state or
 byte arithmetic. Keep one operation per statement and short loop bodies. Matrix
 iteration remains explicit; search and release orchestration should read as ordered
-steps. Oxlint limits block nesting to three levels in source and delivery scripts.
+steps. Oxlint limits block nesting to three levels in source and Vite configuration.
 Review these properties independently of test success.
 
 Tests live in `tests/unit`, `tests/e2e` and `tests/benchmarks`. TS consumer fixtures
 are compiled into ignored output when JavaScript is needed. Vite bundles the
-production files; `.github/scripts` coordinates existing build/release tools.
+production files. `pnpm build` invokes Vite and TypeScript directly; all three
+Vite modes live in `vite.config.ts`. Its final build hook emits only the global
+declaration and source/checksum manifest. CI and publication use explicit commands
+in workflow YAML, without a scripts directory or repository orchestration wrappers.
 
 The 45 inputs use independent replay and mathematical expected minima. A separate
 exhaustive small-state oracle helps expose shared defects. Tests assert behavior,
@@ -64,4 +78,5 @@ observations, not paired performance guarantees.
 
 Official references: [TypeScript](https://www.typescriptlang.org/docs/handbook/intro.html),
 [Vite configuration](https://vite.dev/config/), [Vitest configuration](https://vitest.dev/config/),
-[coverage](https://vitest.dev/guide/coverage.html), [Playwright browsers](https://playwright.dev/docs/browsers).
+[coverage](https://vitest.dev/guide/coverage.html), [Playwright browsers](https://playwright.dev/docs/browsers),
+[GitHub matrices](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations).
